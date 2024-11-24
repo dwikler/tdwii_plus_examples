@@ -1,0 +1,25 @@
+[ req ]
+default_bits        = 2048
+default_md          = sha256
+distinguished_name  = req_distinguished_name
+req_extensions      = v3_req
+prompt              = no
+
+[ req_distinguished_name ]
+countryName                     = US
+stateOrProvinceName             = Illinois
+localityName                    = Springfield
+organizationName                = Springfield General Hospital
+organizationalUnitName          = Radiation Oncology
+commonName                      = workitemwatcher.springfieldgeneral.org
+
+[ v3_req ]
+subjectKeyIdentifier  = hash
+basicConstraints      = CA:FALSE
+keyUsage              = critical, digitalSignature, keyEncipherment
+extendedKeyUsage      = serverAuth, clientAuth
+subjectAltName        = @alt_names
+
+[ alt_names ]
+DNS.1 = workitemwatcher.springfieldgeneral.org
+DNS.2 = localhost

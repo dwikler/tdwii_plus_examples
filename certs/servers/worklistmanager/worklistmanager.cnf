@@ -1,0 +1,26 @@
+[ req ]
+default_bits        = 2048
+default_keyfile     = worklistmanager.key
+distinguished_name  = req_distinguished_name
+x509_extensions     = v3_req
+prompt              = no
+
+[ req_distinguished_name ]
+countryName                 = US
+stateOrProvinceName         = Illinois
+localityName                = Springfield
+organizationName            = Springfield General Hospital
+organizationalUnitName      = Radiation Oncology
+commonName                  = worklistmanager.springfieldgeneral.org
+
+[ v3_req ]
+subjectKeyIdentifier    = hash
+authorityKeyIdentifier  = keyid,issuer
+basicConstraints        = CA:FALSE
+keyUsage                = critical, digitalSignature, keyEncipherment
+extendedKeyUsage        = serverAuth, clientAuth
+subjectAltName          = @alt_names
+
+[ alt_names ]
+DNS.1 = worklistmanager.springfieldgeneral.org
+DNS.2 = localhost
