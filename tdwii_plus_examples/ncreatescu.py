@@ -7,6 +7,7 @@ Used for uploading DICOM UPS SOP Instances to a UPS SCP.
 import argparse
 import os
 import sys
+import ssl
 from pathlib import Path
 
 from pydicom import dcmread
@@ -145,6 +146,30 @@ def _setup_argparser():
         help=(f"set max receive pdu to n bytes (0 for unlimited, " f"default: {DEFAULT_MAX_LENGTH})"),
         type=int,
         default=DEFAULT_MAX_LENGTH,
+    )
+    net_opts.add_argument(
+        "-mtls",
+        "--mutual-tls",
+        action="store_true",
+        help="enable Mutual TLS (mTLS) secure communication",
+    )
+    net_opts.add_argument(
+        "-ca",
+        "--ca-certificate",
+        metavar="[c]a",
+        help="specify CA certificate file",
+    )
+    net_opts.add_argument(
+        "-key",
+        "--private-key",
+        metavar="[k]ey",
+        help="specify private key file",
+    )
+    net_opts.add_argument(
+        "-cert",
+        "--certificate",
+        metavar="[c]ert",
+        help="specify certificate file",
     )
 
     # Transfer Syntaxes
@@ -286,8 +311,55 @@ def main(args=None):
         APP_LOGGER.warning("No suitable DICOM files found")
         sys.exit()
 
+    # Configure mTLS secure communication
+    ssl_cx = None
+    if args.mutual_tls:
+        ca_cert = args.ca_certificate
+        key, cert = args.private_key, args.certificate
+        try:
+            # Create the SSLContext
+            APP_LOGGER.info(f"Creating SSL Context")
+            ssl_cx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+            APP_LOGGER.info(f"Created SSL Context {ssl_cx}")
+
+            APP_LOGGER.info(f"Loading Root CA certificate from {ca_cert}")
+            
+            if not os.path.isfile(ca_cert):
+                APP_LOGGER.error(f"CA certficate file not found: {ca_cert}")
+            else:
+                APP_LOGGER.info(f"CA certificate file found: {ca_cert}")
+
+            with open(ca_cert, 'r') as f:
+                content = f.read()
+                APP_LOGGER.info(f"CA certificate content:\n{content}")
+
+            ssl_cx.load_verify_locations(cafile=ca_cert)
+            APP_LOGGER.info(f"Loaded Root CA certificate from {ca_cert}")
+
+            # Activate mutual TLS (mTLS) mode, requiring client certificates for authentication
+            APP_LOGGER.info(f"Activated mutual TLS (mTLS) mode")
+            ssl_cx.verify_mode = ssl.CERT_REQUIRED
+            
+            APP_LOGGER.info(f"Loading own certificate from {cert} and key from {key}")
+            ssl_cx.load_cert_chain(certfile=cert, keyfile=key)
+            
+            # Set the minimum and maximum TLS version to TLS 1.2
+            APP_LOGGER.info("Setting minimum TLS version")
+            ssl_cx.minimum_version = ssl.TLSVersion.TLSv1_2
+            APP_LOGGER.info("Setting maximum TLS version")
+            ssl_cx.maximum_version = ssl.TLSVersion.TLSv1_3
+            
+            APP_LOGGER.info("Secure connection configuration successful")
+
+            tls_args = (ssl_cx, args.addr)
+
+        except (ssl.SSLError, IOError) as e:
+            APP_LOGGER.error(f"Error creating SSL context: {e}")
+    else:
+        tls_args = None
+        
     # Request association with remote
-    assoc = ae.associate(args.addr, args.port, ae_title=args.called_aet, max_pdu=args.max_pdu)
+    assoc = ae.associate(args.addr, args.port, ae_title=args.called_aet, max_pdu=args.max_pdu, tls_args=tls_args)
     if assoc.is_established:
         ii = 1
         for fpath in lfiles:

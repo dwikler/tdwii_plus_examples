@@ -4,6 +4,7 @@
 import argparse
 import os
 import sys
+import ssl
 from configparser import ConfigParser
 
 import pydicom.config
@@ -68,6 +69,15 @@ def _log_config(config, logger):
     acse, dimse = app["acse_timeout"], app["dimse_timeout"]
     network = app["network_timeout"]
     logger.debug(f"    ACSE: {acse}, DIMSE: {dimse}, Network: {network}")
+    mtls = config.getboolean('DEFAULT', 'mutual_tls')
+    if mtls:
+        ca_cert, key, cert = app["ca_certificate"], app["private_key"], app["certificate"]
+        logger.debug("  Mutual TLS enabled")
+        logger.debug(f"    CA: {ca_cert}")
+        logger.debug(f"    Certificate: {cert}, Private Key: {key}")
+    else:
+         logger.debug("  Mutual TLS disabled")
+
     logger.debug(f"  Storage directory: {app['instance_location']}")
     logger.debug(f"  Database location: {app['database_location']}")
 
@@ -249,7 +259,31 @@ def _setup_argparser():
         metavar="[a]ddress",
         help="override the configured address of the network interface to listen on",
     )
-
+    net_opts.add_argument(
+        "-mtls",
+        "--mutual-tls",
+        metavar="[m]TLS",
+        help="override the configured use of Mutual TLS (mTLS) secure communication",
+    )
+    net_opts.add_argument(
+        "-ca",
+        "--ca-certificate",
+        metavar="[c]a",
+        help="override the configured CA certificate",
+    )
+    net_opts.add_argument(
+        "-key",
+        "--private-key",
+        metavar="[k]ey",
+        help="override the configured private key",
+    )
+    net_opts.add_argument(
+        "-cert",
+        "--certificate",
+        metavar="[c]ert",
+        help="override the configured certificate",
+    )
+        
     db_opts = parser.add_argument_group("Database Options")
     db_opts.add_argument(
         "--database-location",
@@ -307,6 +341,14 @@ def main(args=None):
         config["DEFAULT"]["network_timeout"] = args.network_timeout
     if args.bind_address:
         config["DEFAULT"]["bind_address"] = args.bind_address
+    if args.mutual_tls:
+        config["DEFAULT"]["mutual_tls"] = args.mutual_tls
+    if args.ca_certificate:
+        config["DEFAULT"]["ca_certificate"] = args.ca_certificate
+    if args.private_key:
+        config["DEFAULT"]["private_key"] = args.private_key
+    if args.certificate:
+        config["DEFAULT"]["certificate"] = args.certificate
     if args.database_location:
         config["DEFAULT"]["database_location"] = args.database_location
     if args.instance_location:
@@ -391,8 +433,49 @@ def main(args=None):
         (evt.EVT_N_SET, handle_nset, [db_path, args, APP_LOGGER]),
     ]
 
+    # Configure mTLS secure communication
+    ssl_cx = None
+    if config.getboolean('DEFAULT', 'mutual_tls'):
+        ca_cert = app_config["ca_certificate"]
+        key, cert = app_config["private_key"], app_config["certificate"]
+        try:
+            # Create the SSLContext
+            APP_LOGGER.info(f"Creating SSL Context")
+            ssl_cx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            APP_LOGGER.info(f"Created SSL Context {ssl_cx}")
+
+            APP_LOGGER.info(f"Loading Root CA certificate from {ca_cert}")  
+            if not os.path.isfile(ca_cert):
+                APP_LOGGER.error(f"CA certificate file not found: {ca_cert}")
+            else:
+                APP_LOGGER.info(f"CA certificate file found: {ca_cert}")
+
+            with open(ca_cert, 'r') as f:
+                content = f.read()
+                APP_LOGGER.info(f"CA certificate content:\n{content}")
+
+            ssl_cx.load_verify_locations(cafile=ca_cert)
+            APP_LOGGER.info(f"Loaded Root CA certificate from {ca_cert}")
+
+            # Activate mutual TLS (mTLS) mode, requiring client certificates for authentication
+            APP_LOGGER.info(f"Activated mutual TLS (mTLS) mode")
+            ssl_cx.verify_mode = ssl.CERT_REQUIRED
+            
+            APP_LOGGER.info(f"Loading own certificate from {cert} and key from {key}")
+            ssl_cx.load_cert_chain(certfile=cert, keyfile=key)
+            
+            # Set the minimum and maximum TLS version to TLS 1.2
+            APP_LOGGER.info("Setting minimum TLS version to TLS 1.2")
+            ssl_cx.minimum_version = ssl.TLSVersion.TLSv1_2
+            APP_LOGGER.info("Setting maximum TLS version to TLS 1.3")
+            ssl_cx.maximum_version = ssl.TLSVersion.TLSv1_3
+            
+            APP_LOGGER.info("Secure connection configuration successful")
+        except (ssl.SSLError, IOError) as e:
+            APP_LOGGER.error(f"Error creating SSL context: {e}")
+
     # Listen for incoming association requests
-    ae.start_server((app_config["bind_address"], app_config.getint("port")), evt_handlers=handlers)
+    ae.start_server((app_config["bind_address"], app_config.getint("port")), evt_handlers=handlers, ssl_context=ssl_cx)
 
 
 if __name__ == "__main__":
