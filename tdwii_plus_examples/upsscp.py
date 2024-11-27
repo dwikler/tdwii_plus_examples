@@ -5,7 +5,11 @@ import argparse
 import os
 import sys
 import ssl
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.backends import default_backend
 from configparser import ConfigParser
+from pathlib import Path
 
 import pydicom.config
 from pynetdicom import (
@@ -440,39 +444,57 @@ def main(args=None):
         key, cert = app_config["private_key"], app_config["certificate"]
         try:
             # Create the SSLContext
-            APP_LOGGER.info(f"Creating SSL Context")
+            APP_LOGGER.debug(f"Creating SSL Context")
             ssl_cx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-            APP_LOGGER.info(f"Created SSL Context {ssl_cx}")
 
-            APP_LOGGER.info(f"Loading Root CA certificate from {ca_cert}")  
-            if not os.path.isfile(ca_cert):
-                APP_LOGGER.error(f"CA certificate file not found: {ca_cert}")
-            else:
-                APP_LOGGER.info(f"CA certificate file found: {ca_cert}")
-
-            with open(ca_cert, 'r') as f:
-                content = f.read()
-                APP_LOGGER.info(f"CA certificate content:\n{content}")
-
-            ssl_cx.load_verify_locations(cafile=ca_cert)
-            APP_LOGGER.info(f"Loaded Root CA certificate from {ca_cert}")
+            # Load the CA certificate
+            ca_cert_path = Path(ca_cert).resolve()
+            APP_LOGGER.debug(f"Loading Root CA certificate from {ca_cert_path}")
+            with open(ca_cert_path, "rb") as pem_file:
+                pem_data = pem_file.read()
+                cert_info = x509.load_pem_x509_certificate(pem_data)
+                APP_LOGGER.debug(f"CA certificate content:")
+                APP_LOGGER.debug("  Subject: %s", cert_info.subject)
+                APP_LOGGER.debug("  Issuer: %s", cert_info.issuer)
+                APP_LOGGER.debug("  Validity Period: Not Before: %s, Not After: %s", cert_info.not_valid_before_utc, cert_info.not_valid_after_utc)
+            ssl_cx.load_verify_locations(cafile=ca_cert_path)
 
             # Activate mutual TLS (mTLS) mode, requiring client certificates for authentication
-            APP_LOGGER.info(f"Activated mutual TLS (mTLS) mode")
+            APP_LOGGER.debug(f"Activated mutual authentication")
             ssl_cx.verify_mode = ssl.CERT_REQUIRED
             
-            APP_LOGGER.info(f"Loading own certificate from {cert} and key from {key}")
+            # Load our certificate and private key
+            cert_path, key_path = Path(cert).resolve(), Path(key).resolve()
+            APP_LOGGER.debug(f"Loading our certificate from {cert_path}")
+            with open(cert_path, "rb") as pem_file:
+                pem_data = pem_file.read()
+                cert_info = x509.load_pem_x509_certificate(pem_data)
+                APP_LOGGER.debug(f"Our certificate content:")
+                APP_LOGGER.debug("  Subject: %s", cert_info.subject)
+                APP_LOGGER.debug("  Issuer: %s", cert_info.issuer)
+                APP_LOGGER.debug("  Validity Period: Not Before: %s, Not After: %s", cert_info.not_valid_before_utc, cert_info.not_valid_after_utc)
+            APP_LOGGER.debug(f"Loading our private key from {key_path}")
+            with open(key_path, "rb") as pem_file:
+                pem_data = pem_file.read()
+            try:
+                private_key = serialization.load_pem_private_key(pem_data, password=None, backend=default_backend())
+                key_type = type(private_key).__name__.replace("PrivateKey", "")
+                APP_LOGGER.debug("Our private key is %s-%s", key_type, private_key.key_size) 
+            except Exception as e:
+                APP_LOGGER.error("Invalid private key: %s", e)
+                exit(1)  
             ssl_cx.load_cert_chain(certfile=cert, keyfile=key)
-            
-            # Set the minimum and maximum TLS version to TLS 1.2
-            APP_LOGGER.info("Setting minimum TLS version to TLS 1.2")
+
+            # Set the minimum and maximum TLS version
+            APP_LOGGER.debug("Setting minimum TLS version to TLS 1.2")
             ssl_cx.minimum_version = ssl.TLSVersion.TLSv1_2
-            APP_LOGGER.info("Setting maximum TLS version to TLS 1.3")
+            APP_LOGGER.debug("Setting maximum TLS version to TLS 1.3")
             ssl_cx.maximum_version = ssl.TLSVersion.TLSv1_3
             
-            APP_LOGGER.info("Secure connection configuration successful")
+            APP_LOGGER.info("mTLS secure connection configuration successful")
         except (ssl.SSLError, IOError) as e:
-            APP_LOGGER.error(f"Error creating SSL context: {e}")
+            APP_LOGGER.error(f"Error creating mTLS secure connection configuration: {e}")
+            exit(1)
 
     # Listen for incoming association requests
     ae.start_server((app_config["bind_address"], app_config.getint("port")), evt_handlers=handlers, ssl_context=ssl_cx)
