@@ -30,8 +30,10 @@ certs/
 
 ## Description
 
-- **rootCA/**: Contains all files related to the root Certificate Authority.
-- **servers/**: Contains folders with files related to server applications digital certificates.
-- **clients/**: Contains folders with files related to client applications digital certificates.
+- **[rootCA/](./rootCA/rootCA.md)**: Contains all files related to the root Certificate Authority.
+- **[servers/](./servers/servers.md)**: Contains folders with files related to server applications digital certificates.
+- **[clients/](./clients/clients.md)**: Contains folders with files related to client applications digital certificates.
 
-This structure helps keep everything organized by entity, making it easy to find and manage the various components of your PKI setup.
+This structure helps keep everything organized by entity, making it easy to find and manage the various components of your PKI setup.  
+
+Note: This is a very simple PKI setup and should not be used for production use.

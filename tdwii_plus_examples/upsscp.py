@@ -266,7 +266,7 @@ def _setup_argparser():
     net_opts.add_argument(
         "-mtls",
         "--mutual-tls",
-        metavar="[m]TLS",
+        action="store_true",
         help="override the configured use of Mutual TLS (mTLS) secure communication",
     )
     net_opts.add_argument(
@@ -346,7 +346,7 @@ def main(args=None):
     if args.bind_address:
         config["DEFAULT"]["bind_address"] = args.bind_address
     if args.mutual_tls:
-        config["DEFAULT"]["mutual_tls"] = args.mutual_tls
+        config["DEFAULT"]["mutual_tls"] = str(args.mutual_tls)
     if args.ca_certificate:
         config["DEFAULT"]["ca_certificate"] = args.ca_certificate
     if args.private_key:
