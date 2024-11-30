@@ -127,8 +127,11 @@ dcm4che utilities expects **keystore** and **truststore** files to be specified 
   storescu -c UPSSCP@localhost:2762 --key-store ./certs/clients/workitemcreator/workitemcreator.p12 --trust-store ./certs/rootCA/rootCA.p12 --key-store-pass="" --trust-store-pass="secret" -b DCM4CHE@localhost --tls-cipher TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
   ```
 
-  If errors occur, activate Java networking low level classes debug to get detailed logs of the TLS handshake.
+  Notes:
 
-  ```zsh
-  export JAVA_OPTS="-Djavax.net.debug=all"
-  ```
+  - Make sure to use dcm4che storescu instead of DCMTK or pynetdicom storescu implementations.
+  - If errors occur, activate Java networking low level classes debug to get detailed logs of the TLS handshake.
+
+    ```zsh
+    export JAVA_OPTS="-Djavax.net.debug=all"
+    ```
