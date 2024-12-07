@@ -20,6 +20,8 @@ from pynetdicom._globals import DEFAULT_MAX_LENGTH
 from pynetdicom.apps.common import setup_logging
 from pynetdicom.sop_class import UnifiedProcedureStepPush, UPSGlobalSubscriptionInstance
 
+from security import SecurityProfile
+
 __version__ = "0.1.0"
 
 
@@ -197,6 +199,30 @@ def _setup_argparser():
         type=int,
         default=DEFAULT_MAX_LENGTH,
     )
+    net_opts.add_argument(
+        "-mtls",
+        "--mutual-tls",
+        action="store_true",
+        help="enable Mutual TLS (mTLS) secure communication",
+    )
+    net_opts.add_argument(
+        "-ca",
+        "--ca-certificate",
+        metavar="[c]a",
+        help="specify CA certificate file",
+    )
+    net_opts.add_argument(
+        "-key",
+        "--private-key",
+        metavar="[k]ey",
+        help="specify private key file",
+    )
+    net_opts.add_argument(
+        "-cert",
+        "--certificate",
+        metavar="[c]ert",
+        help="specify certificate file",
+    )
 
     # Transfer Syntaxes
     ts_opts = parser.add_argument_group("Transfer Syntax Options")
@@ -310,6 +336,25 @@ def main(args=None):
     #         ExplicitVRBigEndian,
     #     ]
 
+    # Configure mTLS secure communication
+    ssl_cx = None
+    if args.mutual_tls:
+        ca_cert = args.ca_certificate
+        key, cert = args.private_key, args.certificate
+        
+        try:
+            security_profile = SecurityProfile(ca_cert, key, cert, logger=APP_LOGGER)
+            ssl_cx = security_profile.get_profile(SecurityProfile.SCU_ROLE)
+            APP_LOGGER.info("mTLS security profile successfully configured.")
+
+        except Exception as e:
+            APP_LOGGER.error(f"Failed to create security profile")
+            exit(1)
+
+        tls_args = (ssl_cx, args.addr)
+    else:
+        tls_args = None
+
     # Request association with remote
     assoc = ae.associate(
         args.addr,
@@ -317,6 +362,7 @@ def main(args=None):
         contexts=UnifiedProcedurePresentationContexts,
         ae_title=args.called_aet,
         max_pdu=args.max_pdu,
+        tls_args=tls_args
     )
     if assoc.is_established:
         try:

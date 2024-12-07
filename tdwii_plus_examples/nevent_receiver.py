@@ -20,6 +20,8 @@ from pynetdicom.apps.common import setup_logging
 from pynetdicom.sop_class import Verification
 from pynetdicom.utils import set_ae
 
+from security import SecurityProfile
+
 # Use `None` for empty values
 pydicom.config.use_none_as_empty_text_VR_value = True
 # Don't log identifiers
@@ -172,6 +174,30 @@ def _setup_argparser():
         metavar="[a]ddress",
         help="override the configured address of the network interface to listen on",
     )
+    net_opts.add_argument(
+        "-mtls",
+        "--mutual-tls",
+        action="store_true",
+        help="override the configured use of Mutual TLS (mTLS) secure communication",
+    )
+    net_opts.add_argument(
+        "-ca",
+        "--ca-certificate",
+        metavar="[c]a",
+        help="override the configured CA certificate",
+    )
+    net_opts.add_argument(
+        "-key",
+        "--private-key",
+        metavar="[k]ey",
+        help="override the configured private key",
+    )
+    net_opts.add_argument(
+        "-cert",
+        "--certificate",
+        metavar="[c]ert",
+        help="override the configured certificate",
+    )
 
     db_opts = parser.add_argument_group("Database Options")
     db_opts.add_argument(
@@ -279,6 +305,8 @@ def main(args=None):
         config["DEFAULT"]["network_timeout"] = args.network_timeout
     if args.bind_address:
         config["DEFAULT"]["bind_address"] = args.bind_address
+    if args.mutual_tls:
+        config["DEFAULT"]["mutual_tls"] = str(args.mutual_tls)
     if args.database_location:
         config["DEFAULT"]["database_location"] = args.database_location
     if args.instance_location:
@@ -359,8 +387,23 @@ def main(args=None):
         # (evt.EVT_N_SET, handle_nset, [db_path, args, APP_LOGGER]),
     ]
 
+    # Configure mTLS secure communication if enabled
+    ssl_cx = None
+    if config.getboolean('DEFAULT', 'mutual_tls'):
+        ca_cert = app_config["ca_certificate"]
+        key, cert = app_config["private_key"], app_config["certificate"]
+
+        try:
+            security_profile = SecurityProfile(ca_cert, key, cert, logger=APP_LOGGER)
+            ssl_cx = security_profile.get_profile(SecurityProfile.SCP_ROLE)
+            APP_LOGGER.info("mTLS security profile successfully configured.")
+
+        except Exception as e:
+            APP_LOGGER.error(f"Failed to create security profile")
+            exit(1)
+
     # Listen for incoming association requests
-    ae.start_server((app_config["bind_address"], app_config.getint("port")), evt_handlers=handlers)
+    ae.start_server((app_config["bind_address"], app_config.getint("port")), evt_handlers=handlers, ssl_context=ssl_cx)
 
 
 if __name__ == "__main__":

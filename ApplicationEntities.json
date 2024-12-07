@@ -51,8 +51,10 @@
   },
   {
     "AETitle": "NEVENT_RECEIVER",
-    "IPAddr": "127.0.0.1",
-    "Port": 11115
+    "IPAddr": "localhost",
+    "Port": 11115,
+    "mTLS": false,
+    "CACertificate": "./certs/rootCA/rootCA.pem"
   },
   {
     "AETitle": "TDD",

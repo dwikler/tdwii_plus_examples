@@ -32,6 +32,8 @@ from sqlalchemy.orm import sessionmaker
 from tdwii_plus_examples import tdwii_config
 from tdwii_plus_examples.upsdb import Instance, InvalidIdentifier, add_instance, search
 
+from security import SecurityProfile
+
 _SERVICE_STATUS = {
     "SCHEDULED": {
         "SCHEDULED": 0xC303,
@@ -866,7 +868,7 @@ def handle_nset(event: pynetdicom.events.Event, db_path: Path | str, cli_config,
         return
 
 
-def handle_ncreate(event, storage_dir, db_path, cli_config, logger):
+def handle_ncreate(event, storage_dir, db_path, config, logger):
     """Handler for evt.EVT_N_CREATE.
 
     Parameters
@@ -877,8 +879,8 @@ def handle_ncreate(event, storage_dir, db_path, cli_config, logger):
         The path to the directory where instances will be stored.
     db_path : str
         The database path to use with create_engine().
-    cli_config : dict
-        A :class:`dict` containing configuration settings passed via CLI.
+    config : dict
+        A :class:`dict` containing configuration settings.
     logger : logging.Logger
         The application's logger.
 
@@ -1028,12 +1030,36 @@ def handle_ncreate(event, storage_dir, db_path, cli_config, logger):
 
         subscriber_ip_addr = tdwii_config.known_ae_ipaddr[globalsubscriber]
         subscriber_port = tdwii_config.known_ae_port[globalsubscriber]
+        subscriber_mtls = tdwii_config.known_ae_mtls[globalsubscriber]
+        if subscriber_mtls:
+            subscriber_ca_certificate = tdwii_config.known_ae_ca_certificate[globalsubscriber]
+
+        # Configure mTLS secure communication
+        ssl_cx = None
+        if subscriber_mtls:
+            ca_cert = subscriber_ca_certificate
+            key, cert = config.get('private_key'), config.get('certificate')
+
+            try:
+                security_profile = SecurityProfile(ca_cert, key, cert, logger=logger)
+                ssl_cx = security_profile.get_profile(SecurityProfile.SCU_ROLE)
+                logger.info("mTLS security profile successfully configured.")
+
+            except Exception as e:
+                logger.error(f"Failed to create security profile")
+                exit(1)
+
+            tls_args = (ssl_cx, subscriber_ip_addr)
+        else:
+            tls_args = None
+
         assoc = ae.associate(
             subscriber_ip_addr,
             subscriber_port,
             contexts=UnifiedProcedurePresentationContexts,
             ae_title=globalsubscriber,
             max_pdu=16382,
+            tls_args=tls_args
         )
 
         if assoc.is_established:

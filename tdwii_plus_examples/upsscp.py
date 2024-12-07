@@ -434,7 +434,7 @@ def main(args=None):
         # (evt.EVT_C_STORE, handle_store, [instance_dir, db_path, args, APP_LOGGER]),
         (evt.EVT_N_GET, handle_nget, [db_path, args, APP_LOGGER]),
         (evt.EVT_N_ACTION, handle_naction, [instance_dir, db_path, args, APP_LOGGER]),
-        (evt.EVT_N_CREATE, handle_ncreate, [instance_dir, db_path, args, APP_LOGGER]),
+        (evt.EVT_N_CREATE, handle_ncreate, [instance_dir, db_path, app_config, APP_LOGGER]),
         # (evt.EVT_N_EVENT_REPORT, handle_nevent, [db_path, args, APP_LOGGER]),
         (evt.EVT_N_SET, handle_nset, [db_path, args, APP_LOGGER]),
     ]

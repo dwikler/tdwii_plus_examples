@@ -3,6 +3,10 @@ import sys
 
 known_ae_ipaddr = {}
 known_ae_port = {}
+known_ae_mtls = {}
+known_ae_ca_certificate = {}
+known_ae_certificate = {}
+known_ae_private_key = {}
 machine_ae_map = {}
 
 
@@ -16,7 +20,9 @@ def load_ae_config(path_to_ae_config=None):
     for ae in ae_config_list:
         known_ae_ipaddr[ae["AETitle"]] = ae["IPAddr"]
         known_ae_port[ae["AETitle"]] = ae["Port"]
-
+        known_ae_mtls[ae["AETitle"]] = ae.get("mTLS", False)
+        if known_ae_mtls[ae["AETitle"]] == True:
+            known_ae_ca_certificate[ae["AETitle"]] = ae["CACertificate"]
 
 def load_machine_map(path_to_machine_map=None):
     if path_to_machine_map is not None:
@@ -41,6 +47,8 @@ if __name__ == "__main__":
     load_ae_config(ae_config_file)
     print(known_ae_ipaddr)
     print(known_ae_port)
+    if known_ae_mtls:
+        print(known_ae_ca_certificate)
     load_machine_map(machine_map_file)
     print(machine_ae_map)
     for key in machine_ae_map:

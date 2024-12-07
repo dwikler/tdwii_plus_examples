@@ -20,7 +20,7 @@ class SecurityProfile:
     def __init__(self, ca_certificate, private_key, certificate, logger=None):
         self._logger = logger or logging.getLogger(__name__)
         # Verify certificates and private key
-        self._logger.debug("Initializing SecurityProfile")
+        self._logger.debug("Initializing SecurityProfile instance")
         try:
             self._ca_cert_path = self._load_certificate(ca_certificate)
             self._cert_path = self._load_certificate(certificate)
@@ -65,6 +65,29 @@ class SecurityProfile:
         except Exception as e:
             self._logger.error(f"Error loading certificate from {key_path}: {e}")
             raise
+
+    def get_cert_fingerprint(cert):
+        """Get SHA-256 fingerprint from a certificate."""
+        der = crypto.dump_certificate(crypto.FILETYPE_ASN1, cert)
+        return hashlib.sha256(der).hexdigest()
+
+    def _verify_callback(self, conn, cert, errnum, depth, ok):
+        """Verify peer certificate."""
+        self._logger.debug("Verifying certificate")
+        if not preverify_ok:
+            return False
+        self._logger.debug("  Subject: %s", cert.subject)
+        self._logger.debug("  Issuer: %s", cert.issuer)
+        self._logger.debug("  Validity Period: %s - %s", cert.not_valid_before_utc, cert.not_valid_after_utc)
+        # Optionally we could add verification of known nodes instead of allowing all from the trusted CA
+        # fingerprint = _get_cert_fingerprint(cert)
+        # self._logger.debug("  SHA-256 Fingerprint: %s", fingerprint)
+        # Load allowed fingerprints from a configuration file or PEM file
+        #allowed_fingerprints = load_allowed_fingerprints('allowed_certs.pem')
+        # Check if the fingerprint is in the list of allowed fingerprints
+        #if fingerprint not in allowed_fingerprints:
+        #    return False
+        return True
 
     def get_profile(self, role):
         ssl_cx = None

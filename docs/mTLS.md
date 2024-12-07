@@ -7,14 +7,21 @@ In DICOM Part 15, Secure Transport Connection Profiles specifies requirements to
 - mutual authentication of the application entities (Mutual TLS)
 - data integrity checks
 
-The following tools supports BCP 195 RFC 8996, 9325 TLS Secure Transport Connection Profile:
+The following scripts supports BCP 195 RFC 8996, 9325 TLS Secure Transport Connection Profile:
 
-- Worklist Manager Server (upsscp.py)
-- Workitem Creator Client (ncreatescu.py)
+- upsscp.py
+- ncreatescu.py
+- upsfindscu.py
+- nactionscu.py
+- watchscu.py
+- nevent_receiver.py
+- nevent_sender.py
+
+## mTLS Secure Communications
 
 The [pynetdicom apps](https://pydicom.github.io/pynetdicom/dev/apps/index.html) do not support mTLS.  
-[DCMTK Tools](https://support.dcmtk.org/docs/mod_dcmnet.html) support mTLS but does not support UPS SOP Classes
-[dcm4che Utilities](https://web.dcm4che.org/dcm4che-utilities) support mTLS and UPS SOP Classes.
+[DCMTK Tools](https://support.dcmtk.org/docs/mod_dcmnet.html) do support mTLS but do not support UPS SOP Classes
+[dcm4che Utilities](https://web.dcm4che.org/dcm4che-utilities) do support mTLS and UPS SOP Classes.
 
 Disclaimer:
 Users are responsible for ensuring that their use of encryption technologies complies with all applicable local, national, and international laws and regulations. The provider of this software assumes no liability for any misuse or non-compliance with legal requirements. Users should consult with legal counsel to understand their specific legal obligations related to the use of encryption in their jurisdiction.
@@ -23,42 +30,122 @@ Users are responsible for ensuring that their use of encryption technologies com
 
 mTLS Secure Communications requires a **_Public Key Infrastructure (PKI)_** in order to create, manage and use **_digital certificates_**. This project provides a simple PKI and certificates in the `tdwii_plus_examples\certs` folder. Documentation is provided in [Digital Certificates Folder](../tdwii_plus_examples/certs/certs.md).
 
-## Using the Worklist Manager Server (upsscp.py) with mTLS
+## Using upsscp.py script with mTLS to start a Worklist Manager Server
 
-### Start the Server with the `-mtls` option
-
-in `tdwii_plus_examples/`
+### Start the Server
 
 ```shell
-python upsscp.py -mtls --debug
+python ./tdwii_plus_examples/upsscp.py -mtls -ca ./certs/rootCA/rootCA.pem \
+-cert ./certs/clients/workitemperformer/workitemperformer.pem \
+-key ./certs/clients/workitemperformer/workitemperformer.key \
+--port 2762 \
+--debug
 ```
 
 Note: As DICOM Part 15 BCP 195 RFC 8996, 9325 TLS Secure Transport Connection Profile recommends the use of port number "2762 dicom-tls" for DICOM DIMSE protocol with TLS, using the `--port` is recommended:
 
+### Configure the Server for mTLS
+
+Alternatively, the [default configuration file](../tdwii_plus_examples/default.ini) can be modified to enable mTLS by default by setting `mutual_tls: true`
+The paths to the CA certificate and Worklist Manager Server certificate and key files are also specified in the [default configuration file](../tdwii_plus_examples/default.ini)
+
+- `ca_certificate:` _CA certificate PEM file path_
+- `certificate` _Server certificate PEM file path_
+- `private_key` _Server key PEM file path_
+
+### Configure the Known Application Entities for mTLS
+
+The [known application entities configuration file](../tdwii_plus_examples/ApplicationEntities.ini) contains the network information of peer DICOM applications so that the Worklist Manager Server can notify applications which subscribed for status update events notifications.
+Each known application entity can be configured as using mTLS with their CA certificate to be used for authentication.
+
+- `"mTLS":` _true_ or _false_
+- `"CACertificate":` _CA certificate PEM file path_
+
+## Using ncreatescu.py script with mTLS as a Workitem Creator Client
+
+### Create a workitem
+
 ```shell
-python upsscp.py -mtls --port 2762 --debug
+python ./tdwii_plus_examples/ncreatescu.py -mtls -ca ./certs/rootCA/rootCA.pem \
+-cert ./certs/clients/workitemcreator/workitemcreator.pem \
+-key ./certs/clients/workitemcreator/workitemcreator.key \
+localhost 2762 <upsdicomfilepath> --debug
 ```
+
+## Using upsfindscu.py script with mTLS as a Workitem Performer Client
+
+### Query the Worklist Manager Server for workitems
+
+```shell
+python ./tdwii_plus_examples/upsfindscu.py -mtls -ca ./certs/rootCA/rootCA.pem \
+-cert ./certs/clients/workitemperformer/workitemperformer.pem \
+-key ./certs/clients/workitemperformer/workitemperformer.key \
+-f ./ups_instances/1.2.840.113854.19.4.2017747596206021632.638223481578481915 \
+-w \
+localhost 2762
+```
+
+## Using the nactionscu.py script with mTLS as a Workitem Performer Client
+
+### Claim a workitem
+
+```shell
+python ./tdwii_plus_examples/nactionscu.py -mtls -ca ./certs/rootCA/rootCA.pem \
+-cert ./certs/clients/workitemperformer/workitemperformer.pem \
+-key ./certs/clients/workitemperformer/workitemperformer.key \
+-f <identifierfilepath> \
+-w \
+localhost 2762
+```
+
+## Using watchscu.py script with mTLS as a Workitem Watcher Client
+
+### Subscribe to all workitems (global subscription)
+
+```shell
+python ./tdwii_plus_examples/watchscu.py -mtls -ca ./certs/rootCA/rootCA.pem \
+-cert ./certs/clients/workitemwatcher/workitemwatcher.pem \
+-key ./certs/clients/workitemwatcher/workitemwatcher.key \
+localhost 2762
+--port 2763
+--debug
+```
+
+## Using neventreceiver.py script with mTLS as a Workitem Watcher Client
+
+### Start the Notification Receiver Server
+
+```shell
+python ./tdwii_plus_examples/nevent_receiver.py -mtls \
+-ca ./certs/rootCA/rootCA.pem \
+-cert ./certs/clients/workitemperformer/workitemperformer.pem \
+-key ./certs/clients/workitemperformer/workitemperformer.key
+--port 2763
+```
+
+Note: Even if DICOM Part 15 BCP 195 RFC 8996, 9325 TLS Secure Transport Connection Profile recommends the use of port number "2762 dicom-tls" for DICOM DIMSE protocol with TLS, we choose here to use port number "2763 dicom-tls" for DICOM DIMSE protocol with TLS as 2762 dicom-tls is already used by the Worklist Manager Server.
 
 ### Configure the Server for mTLS
 
-Alternatively, the [configuration file](../tdwii_plus_examples/default.ini) can be modified to enable mTLS by default by setting `mutual_tls: false`
-The paths to the CA certificate and Worklist Manager Server certificate and key files are also specified in the [configuration file](../tdwii_plus_examples/default.ini) and can be overriden in the command line arguments:
+Alternatively, the [notification receiver configuration file](../tdwii_plus_examples/nevent_receiver_default.ini) can be modified to enable mTLS by default by setting `mutual_tls: true`
+The paths to the CA certificate and Workitem Watcher Client (and Server) certificate and key files are also specified in the [notification receiver configuration file](../tdwii_plus_examples/nevent_receiver_default.ini)
 
-- `-ca` _CA certificate PEM file path_
-- `-cert` _Server certificate PEM file path_
-- `-key` _Server key PEM file path_
+- `ca_certificate:` _CA certificate PEM file path_
+- `certificate` _Server certificate PEM file path_
+- `private_key` _Server key PEM file path_
 
-## Using the Workitem Creator Client (ncreatescu.py) with mTLS
+## Using nevent_sender.py script with mTLS as a Worklist Manager Server
 
-### Start the Client with mTLS options
+### Send notifications
 
-in `tdwii_plus_examples/`
+This script sends 3 notifications in a row, each of type UPS State Report with Input Readiness State "READY" and Procedure Step State 'SCHEDULING', 'IN PROGRESS' and "COMPLETED" respectively.
 
 ```shell
-python ncreatescu.py -mtls -ca ./certs/rootCA/rootCA.pem \
--cert ./certs/clients/workitemcreator/workitemcreator.pem \
--key ./certs/clients/workitemcreator/workitemcreator.key \
-localhost 2762 ./ups_instances/<upsdicomfilename> --debug
+python ./tdwii_plus_examples/nevent_sender.py -mtls \
+-ca ./certs/rootCA/rootCA.pem \
+-cert ./certs/servers/worklistmanager/worklistmanager.pem \
+-key ./certs/servers/worklistmanager/worklistmanager.key \
+localhost 2763
 ```
 
 ## Using DCMTK apps with mTLS
@@ -66,8 +153,6 @@ localhost 2762 ./ups_instances/<upsdicomfilename> --debug
 Download and install the [DCMTK Tools](https://dcmtk.org/en/dcmtk/dcmtk-tools/).
 
 ### Verification Client (echoscu)
-
-in `tdwii_plus_examples/`
 
 ```shell
 echoscu -v +tls ./certs/clients/workitemcreator/workitemcreator.key ./certs/clients/workitemcreator/workitemcreator.pem +cf ./certs/rootCA/rootCA.pem localhost 2762

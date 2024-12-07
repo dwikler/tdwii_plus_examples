@@ -27,7 +27,9 @@
   {
     "AETitle": "NEVENT_RECEIVER",
     "IPAddr": "127.0.0.1",
-    "Port": 11115
+    "Port": 11115,
+    "mTLS": false,
+    "CACertificate": "./certs/rootCA/rootCA.pem"
   },
   {
     "AETitle": "TDD",
@@ -35,8 +37,8 @@
     "Port": 11113
   },
   {
-	"AETitle": "IHERO_SCP",
-	"IPAddr": "10.211.55.8",
-	"Port":	10401
+    "AETitle": "IHERO_SCP",
+    "IPAddr": "10.211.55.8",
+    "Port": 10401
   }
 ]
