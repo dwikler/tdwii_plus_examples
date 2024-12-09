@@ -10,6 +10,8 @@ from pynetdicom.sop_class import UnifiedProcedureStepPull
 
 import tdwii_plus_examples.tdwii_config as ae_config
 
+from tdwii_plus_examples.security import SecurityProfile
+
 
 def _create_code_seq_item(value: str | int, designator: str, meaning: str) -> Dataset:
     code_seq_item = Dataset()
@@ -32,7 +34,7 @@ def _unpack_code_seq_item(code_seq_item: Dataset) -> tuple[str, str, str]:
     return code_value, coding_scheme_designator, code_meaning
 
 
-def get_ups(ds_query: pydicom.Dataset, scu_ae_title: str, scp_ae_title: str) -> Iterator[tuple[Dataset, Dataset | None]]:
+def get_ups(ds_query: pydicom.Dataset, scu_ae_title: str, scp_ae_title: str, mtls: bool, ca_cert: str, cert: str, key: str) -> Iterator[tuple[Dataset, Dataset | None]]:
     """Perform UPS C-FIND-RQ and return responses that have UPS content
 
     Args:
@@ -50,7 +52,31 @@ def get_ups(ds_query: pydicom.Dataset, scu_ae_title: str, scp_ae_title: str) -> 
     if scp_ae_title not in ae_config.known_ae_ipaddr:
         logging.error("Unable to query " + scp_ae_title + "not found in this TDW-II Application Entity configuration")
         return
-    assoc = ae.associate(ae_config.known_ae_ipaddr[scp_ae_title], ae_config.known_ae_port[scp_ae_title], ae_title=scp_ae_title)
+
+    print(f"Querying {ae_config.known_ae_ipaddr[scp_ae_title]}:{ae_config.known_ae_port[scp_ae_title]}")
+
+    # Configure mTLS secure communication if needed
+    ssl_cx = None
+    if mtls:
+
+        try:
+            security_profile = SecurityProfile(ca_cert, key, cert, logger=None)
+            ssl_cx = security_profile.get_profile(SecurityProfile.SCU_ROLE)
+            print("mTLS security profile successfully configured.")
+
+        except Exception as e:
+            print(f"Failed to create security profile")
+            exit(1)
+
+        tls_args = (ssl_cx, ae_config.known_ae_ipaddr[scp_ae_title])
+    else:
+        tls_args = None
+
+    assoc = ae.associate(
+        ae_config.known_ae_ipaddr[scp_ae_title], 
+        ae_config.known_ae_port[scp_ae_title], 
+        ae_title=scp_ae_title,
+        tls_args=tls_args)
     if assoc.is_established:
         responses = assoc.send_c_find(ds_query, query_model=query_model)
         for status, response_content in responses:

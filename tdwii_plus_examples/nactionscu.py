@@ -25,7 +25,7 @@ from pynetdicom.sop_class import (  # UnifiedProcedureStepWatch,; UPSFilteredGlo
 
 from tdwii_plus_examples import tdwii_config
 
-from security import SecurityProfile
+from tdwii_plus_examples.security import SecurityProfile
 
 __version__ = "0.1.0"
 

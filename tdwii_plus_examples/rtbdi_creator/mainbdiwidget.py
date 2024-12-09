@@ -34,6 +34,8 @@ from tdwii_plus_examples.rtbdi_creator.storescu import StoreSCU
 #     pyside2-uic form.ui -o ui_form.py
 from tdwii_plus_examples.rtbdi_creator.ui_form import Ui_MainBDIWidget
 
+from tdwii_plus_examples import tdwii_config
+
 
 class MainBDIWidget(QWidget):
     """Main UI for Creating an RT BDI based on an RT (Ion) Plan
@@ -85,7 +87,10 @@ class MainBDIWidget(QWidget):
                     self.plan_path = str(Path(default_dict["plan_path"]).expanduser())
                 if "ups_scp_ae_title" in default_dict:
                     self.ui.line_edit_tms_scp_ae_title.setText(default_dict["ups_scp_ae_title"])
-
+                if "certificate" in default_dict:
+                    self.certificate = default_dict["certificate"]
+                if "private_key" in default_dict:
+                    self.private_key = default_dict["private_key"]
             else:
                 logging.warning("No [DEFAULT] section in toml config file")
 
@@ -180,7 +185,14 @@ class MainBDIWidget(QWidget):
         if tms_ae_title is None or str(tms_ae_title.strip()) == 0:
             logging.warning("No TMS AE Title specified, will not attempt an N-CREATE")
         else:
-            ncreate_scu = NCreateSCU(self.ae_title, tms_ae_title.strip())
+            # Check if we need to use MTLS
+            mtls = tdwii_config.known_ae_mtls[tms_ae_title.strip()]
+            if mtls:
+                print(f"{tms_ae_title.strip()} Worklist Manager is Using MTLS")
+                cert = self.certificate
+                key = self.private_key
+
+            ncreate_scu = NCreateSCU(self.ae_title, tms_ae_title.strip(), mtls, cert, key)
             ups_list = list()
             ups_list.append(ups)
             success = ncreate_scu.create_ups(iods=ups_list)

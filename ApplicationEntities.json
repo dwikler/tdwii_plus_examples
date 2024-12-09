@@ -41,8 +41,10 @@
   },
   {
     "AETitle": "UPSSCP",
-    "IPAddr": "127.0.0.1",
-    "Port": 11114
+    "IPAddr": "localhost",
+    "Port": 2762,
+    "mTLS": true,
+    "CACertificate": "./certs/rootCA/rootCA.pem"
   },
   {
     "AETitle": "PPVS_SCP",

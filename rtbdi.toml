@@ -9,3 +9,6 @@ export_staging_directory =  "~/BDIFolder"
 plan_path = "~/SamplePlanFolder"
 # The AE Title for the ups scp that will respond to UPS C-FIND requests
 ups_scp_ae_title = "TMS"
+# Our digital certificate and private key
+certificate = "./certs/clients/workitemcreator/workitemcreator.pem"
+private_key = "./certs/clients/workitemcreator/workitemcreator.key"

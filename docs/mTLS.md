@@ -23,12 +23,12 @@ The [pynetdicom apps](https://pydicom.github.io/pynetdicom/dev/apps/index.html) 
 [DCMTK Tools](https://support.dcmtk.org/docs/mod_dcmnet.html) do support mTLS but do not support UPS SOP Classes
 [dcm4che Utilities](https://web.dcm4che.org/dcm4che-utilities) do support mTLS and UPS SOP Classes.
 
-Disclaimer:
-Users are responsible for ensuring that their use of encryption technologies complies with all applicable local, national, and international laws and regulations. The provider of this software assumes no liability for any misuse or non-compliance with legal requirements. Users should consult with legal counsel to understand their specific legal obligations related to the use of encryption in their jurisdiction.
-
 ## Public Key Infrastructure (PKI)
 
-mTLS Secure Communications requires a **_Public Key Infrastructure (PKI)_** in order to create, manage and use **_digital certificates_**. This project provides a simple PKI and certificates in the `tdwii_plus_examples\certs` folder. Documentation is provided in [Digital Certificates Folder](../tdwii_plus_examples/certs/certs.md).
+mTLS Secure Communications requires a **_Public Key Infrastructure (PKI)_** in order to create, manage and use **_digital certificates_**. This project provides a simple PKI with examples certificates in the `tdwii_plus_examples\certs` folder. Documentation is provided in [Digital Certificates Folder](../tdwii_plus_examples/certs/certs.md).
+
+Disclaimer:
+Users are responsible for ensuring that their use of encryption technologies complies with all applicable local, national, and international laws and regulations. The provider of this software assumes no liability for any misuse or non-compliance with legal requirements. Users should consult with legal counsel to understand their specific legal obligations related to the use of encryption in their jurisdiction.
 
 ## Using upsscp.py script with mTLS to start a Worklist Manager Server
 

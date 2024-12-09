@@ -8,6 +8,7 @@ from pydicom.uid import UID
 from pynetdicom import AE, Association, UnifiedProcedurePresentationContexts
 from pynetdicom.sop_class import UnifiedProcedureStepPush, UPSGlobalSubscriptionInstance
 
+from tdwii_plus_examples.security import SecurityProfile
 
 class WatchSCU:
     def __init__(
@@ -24,10 +25,15 @@ class WatchSCU:
     def create_action_info(self, match_on_beam_number: bool = False, match_on_step_state: bool = False) -> Dataset:
         return create_action_info(match_on_beam_number=match_on_beam_number, match_on_step_state=match_on_step_state)
 
-    def set_subscription_ae(self, watched_ae_title: str, ip_addr: str = None, port: int = None):
+    def set_subscription_ae(self, watched_ae_title: str, ip_addr: str = None, port: int = None, mtls: bool = False, ca_cert: str = None, cert: str = None, key: str = None):
         self.watched_ae_title = watched_ae_title
         self.ip_addr = ip_addr
         self.port = port
+        if mtls:
+            self.mtls = mtls
+            self.ca_cert = ca_cert
+            self.cert = cert
+            self.key = key
 
     def subscribe(
         self, watched_ae_title: str = None, ip_addr: str = None, port: int = None, matching_keys: Dataset = None
@@ -42,12 +48,32 @@ class WatchSCU:
         if watched_ae_title is None:
             watched_ae_title = self.watched_ae_title
 
+        # Configure mTLS secure communication
+        ssl_cx = None
+        if self.mtls:
+            ca_cert = self.ca_cert
+            key, cert = self.key, self.cert
+
+            try:
+                security_profile = SecurityProfile(ca_cert, key, cert, logger=None)
+                ssl_cx = security_profile.get_profile(SecurityProfile.SCU_ROLE)
+                print("mTLS security profile successfully configured.")
+
+            except Exception as e:
+                print(f"Failed to create security profile")
+                exit(1)
+
+            tls_args = (ssl_cx, watched_ip_addr)
+        else:
+            tls_args = None
+
         ae = AE(ae_title=self.calling_ae_title)
         assoc = ae.associate(
             watched_ip_addr,
             watched_port,
             contexts=UnifiedProcedurePresentationContexts,
             ae_title=watched_ae_title,
+            tls_args=tls_args
         )
         if assoc.is_established:
             try:

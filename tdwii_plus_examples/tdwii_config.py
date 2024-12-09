@@ -5,8 +5,6 @@ known_ae_ipaddr = {}
 known_ae_port = {}
 known_ae_mtls = {}
 known_ae_ca_certificate = {}
-known_ae_certificate = {}
-known_ae_private_key = {}
 machine_ae_map = {}
 
 

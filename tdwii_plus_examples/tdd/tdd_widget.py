@@ -90,6 +90,10 @@ class TDD_Widget(QWidget):
                 if "machine" in default_dict:
                     machine_name = default_dict["machine"]
                     self.ui.machine_name_line_edit.setText(machine_name)
+                if "certificate" in default_dict:
+                    self.certificate = default_dict["certificate"]
+                if "private_key" in default_dict:
+                    self.private_key = default_dict["private_key"]
                 logging.warning("Completed Parsing of " + config_file)
             except Exception:
                 warning_msg = f"Difficulty parsing config file {config_file}"
@@ -341,17 +345,39 @@ class TDD_Widget(QWidget):
 
     @Slot()
     def _restart_scp(self):
+        
+        """
+        Start or restart the TDD Server supporting all Storage SOP Classes
+        and the UPS-Event SOP Class.
+
+        This method is called at initialization of the TDD Widget and is
+        connected to the "Restart SCP" button in the UI. When
+        clicked, it starts or restarts the TDD server using the current
+        values for the AE title and staging directory.
+
+        :return: None
+        """
         tdd_scp_ae_title = self.ui.tdd_ae_line_edit.text()
         staging_dir = self.ui.import_staging_dir_line_edit.text()
         print(f"TDD AE Title: {tdd_scp_ae_title} using {staging_dir} for caching data")
-        # TDD_SCP combines the NEVENT SCP and C-STORE SCP
+        
+        # Start the TDD Server
+        # TDD_SCP combines the N-EVENT-REPORTS SCU (Receiver) and C-STORE SCP
         self.tdd_scp = PPVS_SCP(nevent_callback=self._nevent_callback, ae_title=tdd_scp_ae_title, store_directory=staging_dir)
         self.tdd_scp.run()
+
+        # Prepare the UPS Watch SOP Class SCU to all TDD to subscribe to the TMS
         self.watch_scu = WatchSCU(self.ui.tdd_ae_line_edit.text())
         upsscp_ae_title = self.ui.ups_ae_line_edit.text()
         ip_addr = tdwii_config.known_ae_ipaddr[upsscp_ae_title]
         port = tdwii_config.known_ae_port[upsscp_ae_title]
-        self.watch_scu.set_subscription_ae(upsscp_ae_title, ip_addr=ip_addr, port=port)
+        mtls = tdwii_config.known_ae_mtls[upsscp_ae_title]
+        if mtls:
+            print(f"{upsscp_ae_title} Worklist Manager is Using MTLS")
+            ca_cert = tdwii_config.known_ae_ca_certificate[upsscp_ae_title]
+            cert = self.certificate
+            key = self.private_key
+        self.watch_scu.set_subscription_ae(upsscp_ae_title, ip_addr=ip_addr, port=port, mtls=mtls, ca_cert=ca_cert, cert=cert, key=key)
 
     @Slot()
     def _get_ups(self, ups_uid: str = ""):
@@ -371,7 +397,13 @@ class TDD_Widget(QWidget):
             scheduled_no_sooner_than=soonest_datetime_widget.dateTime().toString("yyyyMMddhhmm"),
             scheduled_no_later_than=self.ui.latest_date_time_edit.dateTime().toString("yyyyMMddhhmm"),
         )
-        responses = get_ups(query_ds, my_ae_title, upsscp_ae_title)
+        mtls = tdwii_config.known_ae_mtls[upsscp_ae_title]
+        if mtls:
+            print(f"{upsscp_ae_title} Worklist Manager is Using MTLS")
+            ca_cert = tdwii_config.known_ae_ca_certificate[upsscp_ae_title]
+            cert = self.certificate
+            key = self.private_key
+        responses = get_ups(query_ds, my_ae_title, upsscp_ae_title, mtls, ca_cert, cert, key)
 
         self.ui.ups_response_tree_widget.clear()
         self.ups_dataset_dict.clear()

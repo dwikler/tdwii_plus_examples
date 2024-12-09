@@ -989,6 +989,8 @@ def handle_ncreate(event, storage_dir, db_path, config, logger):
             session.close()
 
     # Database successfully updated, notify any globally subscribed AE
+    # TODO: modify to send an UPS State Report Event and, if applicable, an UPS Assigned Event
+    
     # Get AET of UPS Event SCP (which is the AET of the UPS Watch SCP)
     acceptor = event.assoc.acceptor
 

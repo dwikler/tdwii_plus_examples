@@ -17,7 +17,9 @@
   {
     "AETitle": "UPSSCP",
     "IPAddr": "127.0.0.1",
-    "Port": 11114
+    "Port": 11114,
+    "mTLS": false,
+    "CACertificate": "./certs/rootCA/rootCA.pem"
   },
   {
     "AETitle": "PPVS_SCP",
