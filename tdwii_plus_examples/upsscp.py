@@ -34,6 +34,7 @@ from tdwii_plus_examples.handlers import (
     handle_ncreate,
     handle_nget,
     handle_nset,
+    handle_conn_open
 )
 
 from security import SecurityProfile
@@ -311,6 +312,11 @@ def _setup_argparser():
 
     return parser.parse_args()
 
+# Define an audit hook function
+def audit_hook(event, args):
+    if event.startswith('socket'):
+        print(f"Audit event: {event}, Arguments: {args}")
+
 
 def main(args=None):
     """Run the application."""
@@ -426,6 +432,7 @@ def main(args=None):
 
     APP_LOGGER.info(f"Configured for instance_dir = {instance_dir}")
     # Set our handler bindings
+
     handlers = [
         (evt.EVT_C_ECHO, handle_echo, [args, APP_LOGGER]),
         (evt.EVT_C_FIND, handle_find, [instance_dir, db_path, args, APP_LOGGER]),
@@ -437,6 +444,7 @@ def main(args=None):
         (evt.EVT_N_CREATE, handle_ncreate, [instance_dir, db_path, app_config, APP_LOGGER]),
         # (evt.EVT_N_EVENT_REPORT, handle_nevent, [db_path, args, APP_LOGGER]),
         (evt.EVT_N_SET, handle_nset, [db_path, args, APP_LOGGER]),
+        (evt.EVT_CONN_OPEN, handle_conn_open, [config.getboolean('DEFAULT', 'mutual_tls'), APP_LOGGER])
     ]
 
     # Configure mTLS secure communication if enabled
@@ -449,6 +457,9 @@ def main(args=None):
             security_profile = SecurityProfile(ca_cert, key, cert, logger=APP_LOGGER)
             ssl_cx = security_profile.get_profile(SecurityProfile.SCP_ROLE)
             APP_LOGGER.info("mTLS security profile successfully configured.")
+
+            # Add the audit hook
+            sys.addaudithook(audit_hook)
 
         except Exception as e:
             APP_LOGGER.error(f"Failed to create security profile")

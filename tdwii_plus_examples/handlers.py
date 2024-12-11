@@ -2,6 +2,8 @@
 import copy
 import logging
 import os
+import socket
+import base64
 
 # from io import BytesIO
 from pathlib import Path
@@ -203,6 +205,51 @@ def _number_of_matching_ups(query_as_ds: Dataset):
             number_of_matches += 1
     return number_of_matches
 
+def handle_conn_open(event, mtls, logger):
+
+    logger.debug("Connection with remote opened")
+    conn_socket = event.assoc.dul.socket.socket
+    client_ip_addr, client_port = conn_socket.getpeername()
+    logger.debug(f"Client IP address: {client_ip_addr} Port: {client_port}")
+    try:
+        hostname, aliases, ip_addresses = socket.gethostbyaddr(client_ip_addr)
+        logger.debug(f"Resolved hostname: {hostname} aliases: {aliases} ip_addresses: {ip_addresses}")
+    except socket.herror:
+        logger.debug("Hostname could not be resolved")
+
+    if mtls:
+        logger.debug(f"Using secure {conn_socket.version()} protocol")
+        logger.debug(f"Using Cipher Suite: {conn_socket.cipher()}")
+
+        peer_cert = conn_socket.getpeercert()
+        if peer_cert is not None:
+            logger.debug(f"Client certificate: {peer_cert}")
+
+        # Available from python 3.13:
+
+        # verified_chain = conn_socket.get_verified_chain()
+        # logger.debug(f"Trust chain:")
+        # for cert in verified_chain:
+        #     # Convert DER to PEM
+        #     pem_cert = "-----BEGIN CERTIFICATE-----\n"
+        #     pem_cert += base64.encodebytes(cert).decode('ascii')
+        #     pem_cert += "-----END CERTIFICATE-----\n"
+        #     logger.debug(pem_cert)
+    
+        # Could add verification that it is a know certififcate 
+
+        #     # Verify the peer certificate
+        #     fingerprint = get_fingerprint(peer_cert)
+        #     if fingerprint == known_fingerprint:
+        #         print("Peer certificate is known and trusted.")
+        #     else:
+        #         print("Peer certificate is not known. Closing connection.")
+        #         event.assoc.abort()
+        # else:
+        #     print("No peer certificate received. Closing connection.")
+        #     event.assoc.abort()
+    else:
+        logger.debug("using unsecure protocol")
 
 def handle_echo(event, cli_config, logger):
     """Handler for evt.EVT_C_ECHO.

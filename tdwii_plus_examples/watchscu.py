@@ -20,7 +20,7 @@ from pynetdicom._globals import DEFAULT_MAX_LENGTH
 from pynetdicom.apps.common import setup_logging
 from pynetdicom.sop_class import UnifiedProcedureStepPush, UPSGlobalSubscriptionInstance
 
-from security import SecurityProfile
+from tdwii_plus_examples.security import SecurityProfile
 
 __version__ = "0.1.0"
 
