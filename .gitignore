@@ -173,3 +173,6 @@ scratchpad/
 
 # MacOS
 .DS_Store
+
+# Reference documents, standards and guidelines
+ref/
