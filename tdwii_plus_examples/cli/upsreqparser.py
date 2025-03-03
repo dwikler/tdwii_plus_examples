@@ -1,3 +1,52 @@
+#!/usr/bin/env python
+"""
+A DICOM UPS Attributes Requirements parser application.
+
+This application parses UPS Attributes requirements from DICOM Part 4 Section
+CC.2.5 and IHE-RO TDW-II Profile Supplement Tables.
+It reads the PS3.4 DICOM standard chunked HTML file and the IHE-RO PDF file
+from the project's `ref` directory or downloads them from NEMA.org and IHE.net
+and converts the tables into tree structures.
+
+The DICOM UPS Attributes requirements tree can be:
+- Filtered to extract requirements for a specific DICOM primitive and role.
+- Enriched with IHE-RO TDW-II requirements tree.
+- Rendered as a flat ASCII table or an ASCII tree.
+- Exported to a JSON file.
+
+Usage:
+    upsreqparser.py [options]
+
+Arguments:
+    None
+
+Options:
+    -h, --help               Show this help message and exit
+    -v, --verbose            Enable verbose output (info level)
+    -d, --debug              Enable debug output (debug level)
+    -q, --quiet              Suppress all output (quiet mode)
+
+    -f, --file               Path to the PS3.4 CC.2.5 XHTML file
+    -id, --table-id          Identifier of the table to extract
+    -i, --include-depth      Recursion depth for including referenced tables
+
+    -p, --primitive          Filter requirements per DIMSE primitive
+    -r, --role               Filter primitive requirements per DICOM Role
+    -m, --mandatory          Filter requirements per DICOM Type
+    -x, --exclude-titles     Exclude rows that are only titles
+ 
+    --tdw-ii                 Add IHE-RO TDW-II requirements
+    --tdw-ii-file            Path to the IHE-RO TDW-II PDF file
+
+    -ta, --table             Print requirements as a flat ASCII table
+    -tr, --tree              Print attributes as an ASCII tree
+    -c, --colorize           Colorize the ASCII output by level of nesting
+
+    -j, --json               Export the requirements to a JSON file
+
+For more details on usage, run:
+    upsreqparser.py --help
+"""
 import argparse
 import logging
 import os
@@ -5,8 +54,9 @@ import re
 import sys
 from pathlib import Path
 
+import pdfplumber
 import requests
-from anytree import Node, PreOrderIter, RenderTree
+from anytree import Node, PreOrderIter, RenderTree, findall
 from anytree.exporter import JsonExporter
 from bs4 import BeautifulSoup
 from rich.console import Console
@@ -27,6 +77,38 @@ primitive_columns = {
     "COMMON": ["name", "tag", "remark"],
 }
 
+# Define lists of attributes corresponding to DIMSE primitives CC.2.5 Tables columns
+tdw_ii_primitive_columns = {
+    "N-CREATE": ["name", "tag", "tdw_ii_ncreate", "tdw_ii_note"],
+    "N-SET": ["name", "tag", "tdw_ii_progress", "tdw_ii_note"],
+    "FINAL": ["name", "tag", "tdw_ii_final", "tdw_ii_note"],
+    "C-FIND": [
+        "name",
+        "tag",
+        "tdw_ii_matching_scu",
+        "tdw_ii_matching_scp",
+        "tdw_ii_return_scu",
+        "tdw_ii_return_scp",
+        "tdw_ii_matching_scu_note",
+        "tdw_ii_matching_scp_note",
+        "tdw_ii_return_scu_note",
+        "tdw_ii_return_scp_note",
+    ],
+    "ALL": [
+        "name",
+        "tag",
+        "tdw_ii_ncreate",
+        "tdw_ii_progress",
+        "tdw_ii_final",
+        "tdw_ii_matching_scu",
+        "tdw_ii_matching_scp",
+        "tdw_ii_return_scu",
+        "tdw_ii_return_scp",
+        "tdw_ii_note",
+    ],
+    "COMMON": ["name", "tag", "tdw_ii_note"],
+}
+
 level_colors = [
     "rgb(255,255,255)",  # Node depth 0, Root: White
     "rgb(173,216,230)",  # Node depth 1, Table Level 0: Light Blue
@@ -39,6 +121,7 @@ level_colors = [
 fdir = os.path.abspath(os.path.dirname(__file__))
 REF_DIR = os.path.join(fdir, "../../ref")
 UPS_PS3_4_CC_2_5_FILE = os.path.join(REF_DIR, "PS3_4_CC.2.5.html")
+TDW_II_FILE = os.path.join(REF_DIR, "IHE_RO_Suppl_TDW_II.pdf")
 
 
 def find_project_root(current_path, marker_file="pyproject.toml"):
@@ -106,6 +189,17 @@ def download_ups_cc_2_5():
     return UPS_PS3_4_CC_2_5_FILE
 
 
+def download_tdw_ii():
+    """Download IHE-RO TDW-II Profile PDF file from IHE.net"""
+    url = "https://www.ihe.net/uploadedFiles/Documents/Radiation_Oncology/IHE_RO_Suppl_TDW_II.pdf"
+    os.makedirs(REF_DIR, exist_ok=True)
+    print(f"downloading IHE-RO TDW-II Profile PDF file from IHE.net to {os.path.abspath(TDW_II_FILE)}")
+    response = requests.get(url)
+    with open(TDW_II_FILE, "wb") as file:
+        file.write(response.content)
+    return TDW_II_FILE
+
+
 def sanitize_string(s):
     """
     Sanitize a given string by replacing non-ASCII characters with a space.
@@ -135,7 +229,25 @@ def get_type(role, value):
         return value.split("/")[-1]
 
 
-def extract_table(dom, table_id, table_nesting_level=0, include_depth=0):
+def extract_table_from_file(file, table_id, include_depth):
+    logger.debug(f"Extracting Table {table_id} from: {file}")
+    file_path = file
+    if not Path(file_path).exists():
+        if file == UPS_PS3_4_CC_2_5_FILE:
+            file_path = download_ups_cc_2_5()
+        else:
+            print(f"{file_path} not found")
+            sys.exit(1)
+
+    with open(file_path, "r", encoding="utf-8") as file:
+        content = file.read()
+
+    dom = BeautifulSoup(content, "lxml-xml")
+
+    return extract_table_from_chtml(dom, table_id, include_depth=include_depth)
+
+
+def extract_table_from_chtml(dom, table_id, table_nesting_level=0, include_depth=0):
     """
     Extract the rows of the specified table and return them as a tree
     of nodes, organized according to their level of nesting under a root node.
@@ -179,7 +291,7 @@ def extract_table(dom, table_id, table_nesting_level=0, include_depth=0):
     level_nodes = {0: root}
 
     # Define the node attributes names
-    node_attributes = ["name", "tag", "ncreate", "nset", "finalstate", "nget", "matching", "return", "remark"]
+    node_attributes = primitive_columns["ALL"]
 
     previous_row_name = ""
     # Read each row in the table
@@ -226,7 +338,7 @@ def extract_table(dom, table_id, table_nesting_level=0, include_depth=0):
                 logger.debug(
                     f"Nesting Level: {row_nesting_level}, Name: {row_data['name']}, Include Table Id: {include_table_id}"
                 )
-                table_headers, included_table_tree = extract_table(
+                table_headers, included_table_tree = extract_table_from_chtml(
                     dom, include_table_id, table_nesting_level=row_nesting_level, include_depth=include_depth - 1
                 )
                 # Add the included table nodes under the most recent node at the upper level
@@ -253,6 +365,303 @@ def extract_table(dom, table_id, table_nesting_level=0, include_depth=0):
             level_nodes[row_nesting_level] = node
 
     return table_headers, root
+
+
+def cleanup_table(tables):
+    if tables:
+        header = tables[0][0]  # Assume the first row of the first table is the header
+        header_found = False
+        for table in tables:
+            cleaned_table = []
+            for row in table:
+                if row == header and not header_found:
+                    header_found = True
+                elif row != header:
+                    cleaned_table.append(row)
+            table[:] = cleaned_table
+    return tables
+
+
+def create_node(row_data, parent_nodes):
+    node_name = row_data.pop("name")
+    level = node_name.count(">") + 1  # Calculate the level based on the number of '>' symbols
+    parent = parent_nodes[level - 1]
+    child = Node(node_name, parent=parent, **row_data)  # Create the child node
+    parent_nodes[level] = child  # Update the current node at this level
+    logger.debug(f"Nesting Level: {level}, Name: {node_name}, Parent Node Name: {parent.name}")
+
+
+def extract_tables_from_pdf(pdf, page_numbers, relevant_table_indexes):
+    """
+    Extract tables from specified pages of a PDF and return the relevant ones.
+
+    Parameters:
+    ----------
+    pdf : pdfplumber.PDF
+        The PDF object from which to extract tables.
+    page_numbers : list of int
+        A list of page numbers from which to extract tables (1-indexed).
+    relevant_table_indexes : list of int
+        A list of indexes specifying which extracted tables to return
+
+    Returns:
+    -------
+    list of list of list of str
+        A list of tables, where each table is represented as a list of rows,
+        and each row is a list of cell strings.
+    """
+
+    all_tables = []
+    for page_num in page_numbers:
+        page = pdf.pages[page_num - 1]  # Page numbers are 0-indexed in pdfplumber
+        tables = page.extract_tables()
+        if tables:
+            for table in tables:
+                cleaned_table = [[cell for cell in row if cell not in ("", None)] for row in table]
+                all_tables.append(cleaned_table)
+
+    relevant_tables = [all_tables[i] for i in relevant_table_indexes if i < len(all_tables)]
+    relevant_tables = cleanup_table(relevant_tables)
+
+    return relevant_tables
+
+
+def extract_notes_from_pdf(pdf, page_numbers):
+    notes = {}
+    note_pattern = re.compile(r"^\d*\s*Note\s\d+:")
+    header_footer_pattern = re.compile(r"^\s*(IHE|_{3,}|Rev\.|Copyright|Template|Page\s\d+|\(TDW-II\))")
+    line_number_pattern = re.compile(r"^\d+\s")
+    end_note_pattern = re.compile(r".*7\.5\.1\.1\.2")
+    current_note = None
+    for page_num in page_numbers:
+        page = pdf.pages[page_num - 1]  # Page numbers are 0-indexed in pdfplumber
+        text = page.extract_text()
+        if text:
+            lines = text.split("\n")
+            for line in lines:
+                if header_footer_pattern.search(line):
+                    continue  # Skip header or footer lines
+                if end_note_pattern.search(line):
+                    current_note = None  # Stop adding to the current note
+                    break  # Stop processing further lines
+                match = note_pattern.search(line)
+                if match:
+                    note_number = match.group().strip()
+                    # Remove any text before "Note note_number:"
+                    note_number = re.sub(r"^\d*\s*", "", note_number)
+                    note_text = line[match.end() :].strip()
+                    notes[note_number] = note_text
+                    current_note = note_number
+                elif current_note:
+                    # Continuation of the current note
+                    line = line_number_pattern.sub("", line).strip()  # Remove line numbers
+                    notes[current_note] += " " + line
+    for note in notes:
+        logger.debug(f"{note} {notes[note]}")
+    return notes
+
+
+def extract_ncreate_scu_tables(pdf, primitive):
+    """
+    Extract UPS Scheduled Procedure Information Base table
+    from TDW-II Profile Supplement pages 57 and 58 and
+    returns the table as a tree.
+    """
+    relevant_tables = extract_tables_from_pdf(pdf, [57, 58, 60], [1, 2, 4])
+
+    # Convert tables to tree
+    root = Node("Root")
+    parent_nodes = {0: root}  # Dictionary to keep track of parent node at each level
+    node_attributes = tdw_ii_primitive_columns[primitive]
+    for table in relevant_tables:
+        for row_index, row in enumerate(table):
+            row_data = {}
+            for cell_index in range(len(row)):
+                cell = row[cell_index]
+                # Replace \n with space unless preceded by a period AND followed by an uppercase letter,
+                # OR followed by the string "CID"
+                row[cell_index] = re.sub(r"[\n](?![A-Z]|CID)|(?<!\.|\:)[\n](?!CID)", " ", cell)
+                # Pad rows to 4 columns
+                if row[0] == "All other attributes":
+                    row = [row[0]] + [""] * (4 - len(row)) + row[1:]
+                else:
+                    row = row + [""] * (4 - len(row))
+                # Add UPS Scheduled Procedure Information for ‘Treatment Delivery’ requirements
+                if cell == "Scheduled Workitem Code Sequence":
+                    table[row_index + 1].append('shall be equal to "121726"')
+                    table[row_index + 2].append('shall be equal to "DCM"')
+                    table[row_index + 3].append('shall be equal to "RT Treatment with Internal Verification"')
+                if cell == "Input Information Sequence":
+                    row[cell_index + 3] += (
+                        "\nShall contain at least 2 Referenced DICOM Instances:"
+                        "\nRT Plan Storage or RT Ion Plan Storage in OST."
+                        "\nRT Beams Delivery Instruction Storage in TMS."
+                        "\nShall contain more Referenced DICOM Instances if Treatment Delivery Type is equal to CONTINUATION:"
+                        "\nRT Beams Treatment Record Storage or RT Ion Beams Treatment Record Storage in OST."
+                    )
+                if cell == "Scheduled Processing Parameters\nSequence":
+                    row[cell_index + 3] += (
+                        "\nShall include 4 Content Items per Template:"
+                        '\nEV (121740, DCM, "Treatment Delivery Type"), VT:TEXT (TREAMENT or CONTINUATION).'
+                        '\nEV (2018001, 99IHERO2018, "Plan Label"), VT:TEXT (RT Plan Label (300A,0002) value).'
+                        '\nEV (2018002, 99IHERO2018, "Current Fraction Number"), VT:NUMERIC '
+                        "(Current Fraction Number (3008,0022) value)."
+                        '\nEV (2018003, 99IHERO2018, "Number of Fractions Planned"), VT:NUMERIC '
+                        "(Number of Fractions Planned (300A,0078) value)."
+                    )
+                row_data[node_attributes[cell_index]] = row[cell_index]
+
+            if row[0] != "All other attributes":
+                create_node(row_data, parent_nodes)
+
+    return root
+
+
+def extract_finalupdate_scu_tables(pdf, primitive):
+    """
+    Extract UPS Performed Procedure Information Base table
+    from TDW-II Profile Supplement pages 61 and 62 and
+    returns the table as a tree.
+    """
+    relevant_tables = extract_tables_from_pdf(pdf, [61, 62], [0, 1])
+
+    # Convert tables to tree
+    root = Node("Root")
+    parent_nodes = {0: root}  # Dictionary to keep track of parent node at each level
+    node_attributes = tdw_ii_primitive_columns[primitive]
+    for table in relevant_tables:
+        for row_index, row in enumerate(table):
+            row_data = {}
+            for cell_index in range(len(row)):
+                cell = row[cell_index]
+                # Replace \n with space unless preceded by a period AND followed by an uppercase letter,
+                # OR followed by the string "CID"
+                row[cell_index] = re.sub(r"[\n](?![A-Z]|CID)|(?<!\.)[\n](?!CID)", " ", cell)
+                # Pad rows to 4 columns
+                if row[0] == "All other attributes":
+                    row = [row[0]] + [""] * (4 - len(row)) + row[1:]
+                else:
+                    row = row + [""] * (4 - len(row))
+                # Add UPS Scheduled Procedure Information for ‘Treatment Delivery’ requirements
+                if cell == ">Performed Workitem Code Sequence":
+                    table[row_index + 1].append('shall be equal to "121726"')
+                    table[row_index + 2].append('shall be equal to "DCM"')
+                    table[row_index + 3].append('shall be equal to "RT Treatment with Internal Verification"')
+                if cell == ">Output Information Sequence":
+                    row[cell_index + 3] += (
+                        "\nShall contain at least 1 items if any therapeutic treatment was delivered to the patient:"
+                        "\nRT Beams Treatment Record Storage (1.2.840.10008.5.1.4.1.1.481.4) or "
+                        "RT Ion Beams Treatment Record Storage (1.2.840.10008.5.1.4.1.1.481.9) stored to OST"
+                        "\nMay be present otherwise"
+                    )
+                row_data[node_attributes[cell_index]] = row[cell_index]
+
+            if row[0] != "All other attributes":
+                create_node(row_data, parent_nodes)
+
+    return root
+
+
+def extract_progressupdate_scu_tables(pdf, primitive):
+    """
+    Extract UPS N-SET Progress Update Requirements table
+    from TDW-II Profile Supplement pages 64 and 65 and
+    returns the table as a tree.
+    """
+    relevant_tables = extract_tables_from_pdf(pdf, [64, 65], [0, 1])
+
+    # Convert tables to tree
+    root = Node("Root")
+    parent_nodes = {0: root}  # Dictionary to keep track of parent node at each level
+    node_attributes = tdw_ii_primitive_columns[primitive]
+    for table in relevant_tables:
+        for row_index, row in enumerate(table):
+            row_data = {}
+            # Process each cell in the row
+            for cell_index in range(len(row)):
+                cell = row[cell_index]
+                # Replace \n with space unless preceded by a period AND followed by an uppercase letter
+                row[cell_index] = re.sub(r"\n|(?<!\.)[\n]", " ", cell)
+
+                # Add N-SET Progress Update Requirements for ‘Treatment Delivery’ requirements
+                if cell == ">Procedure Step Progress Parameters\nSequence":
+                    row[cell_index + 3] += (
+                        "\nShall include 1 Content Item per Template:"
+                        '\nEV (2018004, 99IHERO2018, "Referenced Beam Number"), VT:NUMERIC'
+                    )
+                row_data[node_attributes[cell_index]] = row[cell_index]
+
+            # create node if row has more than 2 elements
+            if len(row) > 2:
+                create_node(row_data, parent_nodes)
+    return root
+
+
+def extract_cfind_tables(pdf, primitive):
+    """
+    Extract UPS C-FIND Requirements table
+    from TDW-II Profile Supplement pages 63 and
+    returns the table as a tree.
+    """
+    relevant_tables = extract_tables_from_pdf(pdf, [63], [0])
+    notes = extract_notes_from_pdf(pdf, [63, 64])
+
+    # Convert tables to tree
+    root = Node("Root")
+    parent_nodes = {0: root}  # Dictionary to keep track of parent node at each level
+    node_attributes = tdw_ii_primitive_columns[primitive]
+    for table in relevant_tables:
+        for row in table:
+            row_data = {}
+            # Process each cell in the row
+            for cell_index in range(len(row)):
+                cell = row[cell_index]
+                # Replace \n with space unless preceded by a period AND followed by an uppercase letter
+                row[cell_index] = re.sub(r"\n|(?<!\.)[\n]", " ", cell)
+
+                # Replace (Note #) placeholder by the note text
+                note_match = re.search(r".*\(Note (\d+)\).*", cell)
+                if note_match:
+                    note_key = "Note " + note_match.group(1) + ":"
+                    if note_key in notes:
+                        note_text = notes[note_key]
+                        row_data[node_attributes[cell_index] + "_note"] = note_text
+                    # Remove the reference from the cell value
+                    cell = re.sub(r"\(Note " + note_match.group(1) + r"\)", "", cell).strip()
+                row_data[node_attributes[cell_index]] = cell
+
+            # create node if row has more than 2 elements
+            if len(row) > 5:
+                create_node(row_data, parent_nodes)
+    return root
+
+
+def merge_trees(table_tree, root_tree, primitive):
+    """
+    Merge the TDW-II attributes from root_tree into table_tree.
+    """
+    logger.debug(f"Nodes to merge:\n{RenderTree(root_tree).by_attr()}")
+
+    for node in root_tree.descendants:
+        # Get the path for the current node using ancestors, matching on tags
+        logger.debug(f"Node: {node.name} ({getattr(node, 'tag', None)})")
+
+        node_path = [getattr(ancestor, "tag", None) for ancestor in node.ancestors] + [getattr(node, "tag", None)]
+        logger.debug(f"Node Path: {node_path}")
+
+        # Find matching nodes in table_tree based on the full node path
+        matching_nodes = findall(
+            table_tree,
+            filter_=lambda n: [getattr(ancestor, "tag", None) for ancestor in n.ancestors] + [getattr(n, "tag", None)]
+            == node_path,
+        )
+
+        for match in matching_nodes:
+            logger.debug(f"Match found: {match.name} with path {node_path}")
+            # Merge TDW-II attributes
+            for key, value in node.__dict__.items():
+                if key in tdw_ii_primitive_columns[primitive] and key not in ["name", "tag"]:
+                    setattr(match, key, value)
 
 
 def remove_nodes_attributes(root, attributes_to_remove):
@@ -287,7 +696,7 @@ def remove_optional_nodes(root, primitive_attribute):
         # Remove nodes based on primitive_attribute
         if hasattr(node, primitive_attribute[0]):
             type = getattr(node, primitive_attribute[0])
-            if type in types_to_remove and type not in types_to_keep:
+            if type in types_to_remove and type not in types_to_keep and not hasattr(node, "tdw_ii"):
                 logger.debug(f"[{type.rjust(3)}] : Removing {node.name} element")
                 node.parent = None
                 continue
@@ -298,7 +707,7 @@ def remove_optional_nodes(root, primitive_attribute):
             logger.debug(f"[{''.rjust(3)}] : Keeping {node.name} element")
 
         # Remove nodes under "Sequence" nodes with specific primitive_attributes
-        if "Sequence" in node.name and hasattr(node, primitive_attribute[0]):
+        if "Sequence" in node.name and hasattr(node, primitive_attribute[0]) and not hasattr(node, "tdw_ii"):
             type = getattr(node, primitive_attribute[0])
             if type in ["3", "2", "2C", "-", "O", "Not allowed"]:
                 logger.debug(f"[{type.rjust(3)}] : Removing {node.name} subelements")
@@ -316,17 +725,65 @@ def remove_titles_nodes(root):
             node.parent = None
 
 
-def render_tree_as_table(headers, table_tree, primitive=None, role=None, colorize=False):
+def render_tree_as_table(headers, table_tree, primitive=None, role=None, tdw_ii=False, colorize=False):
     console = Console()
     table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=box.ASCII_DOUBLE_HEAD)
     # Add columns to the table
     for header in headers:
         table.add_column(header, overflow="fold", max_width=30)
+    if tdw_ii:
+        if primitive == "C-FIND":
+            column_title = "TDW-II " + primitive
+            scu_columns_suffixes = [" Matching Keys SCU", " Return Keys SCU"]
+            scp_columns_suffixes = [" Matching Keys SCP", " Return Keys SCP"]
+            if role == "SCU" or role is None:
+                for suffix in scu_columns_suffixes:
+                    table.add_column(column_title + suffix, overflow="fold", max_width=30)
+            if role == "SCP" or role is None:
+                for suffix in scp_columns_suffixes:
+                    table.add_column(column_title + suffix, overflow="fold", max_width=30)
+            # Add column for notes
+            if role == "SCU" or role is None:
+                for suffix in scu_columns_suffixes:
+                    table.add_column(column_title + suffix + " Note", overflow="fold", max_width=30)
+            if role == "SCP" or role is None:
+                for suffix in scp_columns_suffixes:
+                    table.add_column(column_title + suffix + " Note", overflow="fold", max_width=30)
+
+        elif primitive == "FINAL":
+            column_title = "TDW-II " + primitive
+            table.add_column(column_title, overflow="fold", max_width=30)
+            table.add_column(column_title + " Note", overflow="fold", max_width=30)
+
+        else:
+            column_title = "TDW-II " + primitive + " Type"
+            table.add_column(column_title, overflow="fold", max_width=30)
+            table.add_column(column_title + " Note", overflow="fold", max_width=30)
+    column_names = [column.header for column in table.columns]
+    logger.debug(f"Columns: {column_names}")
 
     # Define the node attributes names
     node_attributes = primitive_columns["ALL"] if primitive is None else primitive_columns[primitive]
-    if role is not None:
+    if role is not None and primitive == "C-FIND":
+        if role == "SCU":
+            node_attributes.remove("return")
+        else:
+            node_attributes.remove("matching")
+    elif role is not None and primitive not in ("C-FIND", "FINAL"):
         node_attributes.append("comment")
+    if tdw_ii:
+        for attr in tdw_ii_primitive_columns[primitive]:
+            if attr not in ("name", "tag"):
+                if primitive == "C-FIND" and role == "SCU" and "scu" in attr:
+                    node_attributes.append(attr)
+                elif primitive == "C-FIND" and role == "SCP" and "scp" in attr:
+                    node_attributes.append(attr)
+                elif primitive == "C-FIND" and role is None:
+                    node_attributes.append(attr)
+                else:
+                    node_attributes.append(attr)
+
+    logger.debug(f"Attributes: {node_attributes}")
 
     # Traverse the tree and add rows to the table
     for pre, fill, node in RenderTree(table_tree):
@@ -351,53 +808,86 @@ def render_tree_as_table(headers, table_tree, primitive=None, role=None, coloriz
 
         table.add_row(*row, style=row_style)
     if any("Comment" in header for header in headers):
-        # swap the 2 latest columns
-        table.columns[-2], table.columns[-1] = table.columns[-1], table.columns[-2]
+        # swap the 4th and 5th columns
+        table.columns[3], table.columns[4] = table.columns[4], table.columns[3]
     # Print the table
     console.print(table)
 
 
-def main():
+def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="Parse UPS Attributes Requirements from DICOM Part 4 Section CC.2.5 Tables.\n"
-        "This script downloads the chunked HTML file from NEMA.org, \n"
-        "converts it to a tree data structure, which is filtered, rendered, and \n"
-        "exported to a JSON file according to the specified options.",
+        description=(
+            "A DICOM UPS Attributes Requirements parser application.\n\n"
+            "This application parses UPS Attributes requirements from DICOM Part 4 Section "
+            "CC.2.5 and IHE-RO TDW-II Profile Supplement Tables.\n"
+            "It reads the PS3.4 DICOM standard chunked HTML file and the IHE-RO PDF file "
+            "from the project's `ref` directory or downloads them from NEMA.org and IHE.net "
+            "and converts the tables into tree structures.\n\n"
+            "The DICOM UPS Attributes requirements tree can be:\n"
+            "- Filtered to extract requirements for a specific DICOM primitive and role.\n"
+            "- Enriched with IHE-RO TDW-II requirements tree.\n"
+            "- Rendered as a flat ASCII table or an ASCII tree.\n"
+            "- Exported to a JSON file."
+        ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False,
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output (info level)")
-    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug output (debug level)")
-    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress all output (quiet mode)")
-    parser.add_argument("-j", "--json", action="store_true", help="Export the requirements to a JSON file")
-    parser.add_argument("-ta", "--table", action="store_true", help="Print requirements as a flat ASCII table")
-    parser.add_argument("-tr", "--tree", action="store_true", help="Print attributes as an ASCII tree")
-    parser.add_argument("-c", "--colorize", action="store_true", help="Colorize the ASCII output by level of nesting")
-    parser.add_argument("-i", "--include-depth", type=int, default=0, help="Recursion depth for including referenced tables")
-    parser.add_argument(
+    # General options
+    general_group = parser.add_argument_group("General Options")
+    general_group.add_argument("-h", "--help", action="help", help="Show this help message and exit")
+    general_group.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output (info level)")
+    general_group.add_argument("-d", "--debug", action="store_true", help="Enable debug output (debug level)")
+    general_group.add_argument("-q", "--quiet", action="store_true", help="Suppress all output (quiet mode)")
+
+    # Parsing options
+    parse_group = parser.add_argument_group("Parsing Options")
+    parse_group.add_argument(
+        "-f", "--file", type=str, default=UPS_PS3_4_CC_2_5_FILE, help="Path to the PS3.4 CC.2.5 XHTML file"
+    )
+    parse_group.add_argument(
+        "-id", "--table-id", type=str, default="table_CC.2.5-3", help="Identifier of the table to extract"
+    )
+    parse_group.add_argument(
+        "-i", "--include-depth", type=int, default=0, help="Recursion depth for including referenced tables"
+    )
+
+    # Filtering options
+    filter_group = parser.add_argument_group("Filtering Options")
+    filter_group.add_argument(
         "-p",
         "--primitive",
         type=str,
         choices=["N-CREATE", "N-SET", "N-GET", "C-FIND", "FINAL"],
         default=None,
-        help='filter requirements per DIMSE primitive"',
+        help="Filter requirements per DIMSE primitive",
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "-r",
         "--role",
         type=str,
         choices=["SCU", "SCP"],
         default=None,
-        help="filter primitive requirements per DICOM Role (requires --primitive to be set)",
+        help="Filter primitive requirements per DICOM Role (requires --primitive to be set)",
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "-m",
         "--mandatory",
         action="store_true",
-        help="filter requirements per DICOM Type (requires --role and --primitive to be set)",
+        help="Filter requirements per DICOM Type (requires --role and --primitive to be set)",
     )
-    parser.add_argument("-x", "--exclude-titles", action="store_true", help="Exclude rows that are only titles")
-    parser.add_argument("-f", "--file", type=str, default=UPS_PS3_4_CC_2_5_FILE, help="Path to the PS3.4 CC.2.5 XHTML file")
-    parser.add_argument("-id", "--table-id", type=str, default="table_CC.2.5-3", help="Identifier of the table to extract")
+    filter_group.add_argument("-x", "--exclude-titles", action="store_true", help="Exclude rows that are only titles")
+
+    # Output options
+    output_group = parser.add_argument_group("Output Options")
+    output_group.add_argument("-ta", "--table", action="store_true", help="Print requirements as a flat ASCII table")
+    output_group.add_argument("-tr", "--tree", action="store_true", help="Print attributes as an ASCII tree")
+    output_group.add_argument("-c", "--colorize", action="store_true", help="Colorize the ASCII output by level of nesting")
+    output_group.add_argument("-j", "--json", action="store_true", help="Export the requirements to a JSON file")
+
+    # Enrichment options
+    enrich_group = parser.add_argument_group("Enrichment Options")
+    enrich_group.add_argument("--tdw-ii", action="store_true", help="Add IHE-RO TDW-II requirements")
+    parse_group.add_argument("--tdw-ii-file", type=str, default=TDW_II_FILE, help="Path to the IHE-RO TDW-II PDF file")
 
     args = parser.parse_args()
 
@@ -417,24 +907,14 @@ def main():
     elif args.quiet:
         log_level = logging.ERROR
 
+    return args, log_level
+
+
+def main():
+    args, log_level = parse_arguments()
     setup_logging(log_level)
 
-    file_path = args.file
-    logger.debug(f"Extracting Table {args.table_id} from: {file_path}")
-    if not Path(file_path).exists():
-        if args.file == UPS_PS3_4_CC_2_5_FILE:
-            file_path = download_ups_cc_2_5()
-        else:
-            print(f"{file_path} not found")
-            sys.exit(1)
-
-    with open(file_path, "r", encoding="utf-8") as file:
-        content = file.read()
-
-    dom = BeautifulSoup(content, "lxml-xml")  # Use the lxml XML parser
-
-    table_headers, table_tree = extract_table(dom, args.table_id, include_depth=args.include_depth)
-
+    table_headers, table_tree = extract_table_from_file(args.file, args.table_id, args.include_depth)
     if table_tree is not None:
         print(f"Successfully extracted UPS {args.primitive} DIMSE attributes requirements " f"from Table {args.table_id[6:]}")
 
@@ -471,6 +951,52 @@ def main():
                 if not (args.primitive == "C-FIND" or args.primitive == "FINAL"):
                     table_headers.append("Usage " + args.primitive + " Comments")
 
+    # Add IHE-RO TDW-II requirements
+    if args.tdw_ii:
+        file_path = args.tdw_ii_file
+        if not Path(file_path).exists():
+            if args.tdw_ii_file == TDW_II_FILE:
+                file_path = download_tdw_ii()
+            else:
+                print(f"{file_path} not found")
+                sys.exit(1)
+
+        logger.debug(f"Extracting TDW-II UPS Requirements from: {file_path}")
+        with pdfplumber.open(file_path) as pdf:
+            if args.primitive == "N-CREATE" and args.role == "SCU":
+                tdw_ii_tree = extract_ncreate_scu_tables(pdf, args.primitive)
+                logger.debug("Merging TDW-II N-CREATE SCU requirements")
+                merge_trees(table_tree, tdw_ii_tree, args.primitive)
+            elif args.primitive == "FINAL" and args.role == "SCU":
+                tdw_ii_tree = extract_finalupdate_scu_tables(pdf, args.primitive)
+                logger.debug("Merging TDW-II N-SET Final Update SCU requirements")
+                merge_trees(table_tree, tdw_ii_tree, args.primitive)
+            elif args.primitive == "N-SET" and args.role == "SCU":
+                tdw_ii_tree = extract_progressupdate_scu_tables(pdf, args.primitive)
+                logger.debug("Merging TDW-II N-SET Progress Update SCU requirements")
+                merge_trees(table_tree, tdw_ii_tree, args.primitive)
+            elif args.primitive == "C-FIND":
+                tdw_ii_tree = extract_cfind_tables(pdf, args.primitive)
+                logger.debug("Merging TDW-II C-FIND SCU requirements")
+                merge_trees(table_tree, tdw_ii_tree, args.primitive)
+                if args.role is not None:
+                    if args.role == "SCU":
+                        scp_attributes = [
+                            "tdw_ii_matching_scp",
+                            "tdw_ii_return_scp",
+                            "tdw_ii_matching_scp_note",
+                            "tdw_ii_return_scp_note",
+                        ]
+                        attributes_to_remove.extend(scp_attributes)
+                    elif args.role == "SCP":
+                        scu_attributes = [
+                            "tdw_ii_matching_scu",
+                            "tdw_ii_return_scu",
+                            "tdw_ii_matching_scu_note",
+                            "tdw_ii_return_scu_note",
+                        ]
+                        attributes_to_remove.extend(scu_attributes)
+                    remove_nodes_attributes(table_tree, attributes_to_remove)
     # Filter out optional rows by Type
     if args.mandatory:
         remove_optional_nodes(table_tree, primitive_attribute)
@@ -481,7 +1007,9 @@ def main():
 
     # Display the table a a flat ASCII table
     if args.table:
-        render_tree_as_table(table_headers, table_tree, primitive=args.primitive, role=args.role, colorize=args.colorize)
+        render_tree_as_table(
+            table_headers, table_tree, primitive=args.primitive, role=args.role, tdw_ii=args.tdw_ii, colorize=args.colorize
+        )
 
     # Display the table as an ASCII tree
     if args.tree:
@@ -496,7 +1024,13 @@ def main():
     # Export the table tree to a JSON file
     if args.json:
         # Create the output file name based on the extract scope
-        scope = [args.table_id, args.primitive or "", args.role or "", "mandatory" if args.mandatory else ""]
+        scope = [
+            args.table_id,
+            args.primitive or "",
+            args.role or "",
+            "tdw-ii" if args.tdw_ii else "",
+            "mandatory" if args.mandatory else "",
+        ]
 
         file_stem = "_".join(filter(None, scope))
 
