@@ -652,8 +652,9 @@ def merge_trees(table_tree, root_tree, primitive):
         # Find matching nodes in table_tree based on the full node path
         matching_nodes = findall(
             table_tree,
-            filter_=lambda n: [getattr(ancestor, "tag", None) for ancestor in n.ancestors] + [getattr(n, "tag", None)]
-            == node_path,
+            filter_=lambda n: (
+                [getattr(ancestor, "tag", None) for ancestor in n.ancestors] + [getattr(n, "tag", None)] == node_path
+            ),
         )
 
         for match in matching_nodes:
@@ -686,17 +687,30 @@ def split_nodes_attributes(root, primitive_attribute, role):
                 setattr(node, attr_to_split, role_type)
 
 
-def remove_optional_nodes(root, primitive_attribute):
+def remove_optional_nodes(root, primitive_attribute, tdw_ii_attribute=None):
     # Define the types to keep and remove
+    # TODO: Check what to do with "" in FINAL
+    # TODO: Check what to do with "Not allowed" types
+    logger.debug(f"Removing nodes based on value of {primitive_attribute[0]} attribute")
     types_to_keep = ["1", "1C", "2", "2C", "U", "R", "RC", "P", "X"]
     types_to_remove = ["3", "-", "O"]
+    if tdw_ii_attribute:
+        tdw_ii_types_to_keep = ["R", "R*", "RC", "RC*", "R+", "RC+", "R+*", "RC+*", "D", "X", "X+"]
+        tdw_ii_types_to_remove = ["O", "O+", "O+*", "-"]
     # Iterate on a static list of nodes to safely modify the tree structure
     for node in list(PreOrderIter(root)):
         type = None
         # Remove nodes based on primitive_attribute
         if hasattr(node, primitive_attribute[0]):
             type = getattr(node, primitive_attribute[0])
-            if type in types_to_remove and type not in types_to_keep and not hasattr(node, "tdw_ii"):
+            if type in types_to_remove and type not in types_to_keep:
+                # Check if we need to keep the node based on TDW-II
+                if tdw_ii_attribute:
+                    if hasattr(node, tdw_ii_attribute[0]):
+                        tdw_ii_type = getattr(node, tdw_ii_attribute[0])
+                        if tdw_ii_type in tdw_ii_types_to_keep and tdw_ii_type not in tdw_ii_types_to_remove:
+                            logger.debug(f"[{tdw_ii_type.rjust(3)}] : Keeping {node.name} element")
+                            continue
                 logger.debug(f"[{type.rjust(3)}] : Removing {node.name} element")
                 node.parent = None
                 continue
@@ -750,15 +764,13 @@ def render_tree_as_table(headers, table_tree, primitive=None, role=None, tdw_ii=
                 for suffix in scp_columns_suffixes:
                     table.add_column(column_title + suffix + " Note", overflow="fold", max_width=30)
 
-        elif primitive == "FINAL":
+        elif primitive in ["N-CREATE", "N-SET", "FINAL"] and role == "SCU":
             column_title = "TDW-II " + primitive
             table.add_column(column_title, overflow="fold", max_width=30)
             table.add_column(column_title + " Note", overflow="fold", max_width=30)
 
         else:
-            column_title = "TDW-II " + primitive + " Type"
-            table.add_column(column_title, overflow="fold", max_width=30)
-            table.add_column(column_title + " Note", overflow="fold", max_width=30)
+            print(f"IHE-RO TDW-II does not define any additional UPS requirements for {primitive} {role}.")
     column_names = [column.header for column in table.columns]
     logger.debug(f"Columns: {column_names}")
 
@@ -780,7 +792,7 @@ def render_tree_as_table(headers, table_tree, primitive=None, role=None, tdw_ii=
                     node_attributes.append(attr)
                 elif primitive == "C-FIND" and role is None:
                     node_attributes.append(attr)
-                else:
+                elif primitive in ["N-CREATE", "N-SET", "FINAL"] and role == "SCU":
                     node_attributes.append(attr)
 
     logger.debug(f"Attributes: {node_attributes}")
@@ -916,7 +928,10 @@ def main():
 
     table_headers, table_tree = extract_table_from_file(args.file, args.table_id, args.include_depth)
     if table_tree is not None:
-        print(f"Successfully extracted UPS {args.primitive} DIMSE attributes requirements " f"from Table {args.table_id[6:]}")
+        print(
+            f"Successfully extracted UPS {args.primitive} DIMSE attributes requirements "
+            f"from DICOM Part 4 Table {args.table_id[6:]}"
+        )
 
     # Filter columns based on DIMSE primitive and role
     if args.primitive is not None:
@@ -935,9 +950,12 @@ def main():
 
         remove_nodes_attributes(table_tree, attributes_to_remove)
 
-        primitive_attribute = list(
-            set(primitive_columns[args.primitive]) - set(primitive_columns["COMMON"])
-        )  # note that order is lost
+        primitive_attribute = list(set(primitive_columns[args.primitive]) - set(primitive_columns["COMMON"]))
+        if args.primitive == "C-FIND" and args.role is not None:
+            if args.role == "SCU":
+                primitive_attribute = ["matching"]
+            elif args.role == "SCP":
+                primitive_attribute = ["return"]
 
     # Split column by role
     if args.role is not None and not (args.primitive == "C-FIND" or args.primitive == "FINAL"):
@@ -997,9 +1015,16 @@ def main():
                         ]
                         attributes_to_remove.extend(scu_attributes)
                     remove_nodes_attributes(table_tree, attributes_to_remove)
+        tdw_ii_attribute = list(set(tdw_ii_primitive_columns[args.primitive]) - set(tdw_ii_primitive_columns["COMMON"]))
+        if args.primitive == "C-FIND" and args.role is not None:
+            if args.role == "SCU":
+                tdw_ii_attribute = ["tdw_ii_matching_scp"]
+            elif args.role == "SCP":
+                tdw_ii_attribute = ["tdw_ii_return_scp"]
+
     # Filter out optional rows by Type
     if args.mandatory:
-        remove_optional_nodes(table_tree, primitive_attribute)
+        remove_optional_nodes(table_tree, primitive_attribute, tdw_ii_attribute)
 
     # Filter out rows that are just titles
     if args.exclude_titles:
@@ -1033,7 +1058,10 @@ def main():
         ]
 
         file_stem = "_".join(filter(None, scope))
-
+        if args.file:
+            file_path = args.file
+        else:
+            file_path = UPS_PS3_4_CC_2_5_FILE
         input_file_path = Path(file_path)
         output_file_path = input_file_path.with_stem(f"{file_stem}").with_suffix(".json")
 
