@@ -1024,7 +1024,7 @@ def main():
 
     # Filter out optional rows by Type
     if args.mandatory:
-        remove_optional_nodes(table_tree, primitive_attribute, tdw_ii_attribute)
+        remove_optional_nodes(table_tree, primitive_attribute, tdw_ii_attribute if args.tdw_ii else None)
 
     # Filter out rows that are just titles
     if args.exclude_titles:
