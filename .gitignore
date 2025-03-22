@@ -176,3 +176,6 @@ scratchpad/
 
 # Reference documents, standards and guidelines
 ref/
+
+# Sourcery refactoring tool configuration file
+.sourcery.yaml
