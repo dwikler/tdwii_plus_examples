@@ -2,7 +2,8 @@ import argparse
 import logging
 import os
 import sys
-from tdwii_plus_examples.standard.dicom_attribute_model import DICOMAttributeModel
+
+from tdwii_plus_examples.standard.ups_attribute_model import UPSAttributeModel
 
 # Configure the logger at the module level
 logger = logging.getLogger(os.path.basename(sys.argv[0]))
@@ -69,55 +70,6 @@ def setup_logging(log_level=logging.DEBUG):
         logger.addHandler(file_handler)
 
 
-def _find_include_id(tr_elements):
-    target_found = False
-    for tr in tr_elements:
-        first_td = tr.find('td')
-        if first_td and first_td.get_text(strip=True) == '>Output Information Sequence':
-            logger.debug("Target <tr> found")
-            target_found = True
-            break
-
-    if target_found:
-        tr = tr.find_next('tr')
-        first_td = tr.find('td')
-        if first_td and first_td.get_text(strip=True).startswith('>Include'):
-            logger.debug("Next <tr> with required starting value found")
-            return first_td.find('a')['id']
-
-    return None
-
-
-def patch_output_info(attribute_model, dom, table_id):
-    outputinfoseq_include_id = find_outputinfoseq_include(attribute_model, dom, table_id)
-    if not outputinfoseq_include_id:
-        logger.warning("Include ID not found")
-        return
-
-    element = dom.find(id=outputinfoseq_include_id).find_parent()
-    span_element = element.find('span', class_='italic')
-    if span_element:
-        for child in span_element.children:
-            if isinstance(child, str) and '>Include' in child:
-                new_text = child.replace('>Include', '>>Include')
-                child.replace_with(new_text)
-
-
-def find_outputinfoseq_include(attribute_model, dom, table_id):
-    table = attribute_model.get_table(dom, table_id)
-    if not table:
-        return None
-
-    logger.debug(f"Table with id {table_id} found")
-    tr_elements = table.find_all('tr')
-    include_id = _find_include_id(tr_elements)
-
-    if include_id is None:
-        logger.debug("No matching <tr> found")
-
-    return include_id
-
-
 def configure_logging(args):
     log_level = logging.WARNING
     if args.verbose:
@@ -135,27 +87,23 @@ def main():
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug output (debug level)")
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress all output (quiet mode)")
     parser.add_argument("-i", "--include-depth", type=int, default=0, help="Recursion depth for including referenced tables")
-
+    parser.add_argument(
+        "-p",
+        "--primitive",
+        type=str,
+        choices=["N-CREATE", "N-SET", "N-GET", "C-FIND", "FINAL"],
+        default="ALL_PRIMITIVES",
+        help="Filter requirements per DIMSE primitive",
+    )
     args = parser.parse_args()
 
     configure_logging(args)
 
-    attribute_model = DICOMAttributeModel(logger=logger, additional_columns_attributes=[(2, "ncreate"), (3, "nset")])
-    if not os.path.exists(UPS_PS3_4_CC_2_5_FILE):
-        file_path = attribute_model.download_xhtml(UPS_REQ_URL, UPS_PS3_4_CC_2_5_FILE)
-    else:
-        file_path = UPS_PS3_4_CC_2_5_FILE
-    dom = attribute_model.read_xhtml_dom(file_path)
-
-    patch_output_info(attribute_model, dom, UPS_REQ_TABLE_ID)
-
-    # dom = attribute_model.patch_text_in_element(dom, outputinfoseq_include_id, old_text, f">{old_text}")
-    attribute_model.parse_table(dom, UPS_REQ_TABLE_ID, include_depth=args.include_depth)
+    # attribute_model = DICOMAttributeModel(logger=logger, additional_columns_attributes=[(2, "ncreate"), (3, "nset")])
+    attribute_model = UPSAttributeModel(include_depth=args.include_depth, logger=logger)
+    attribute_model.filter_attributes_by_primitive(args.primitive)
     attribute_model.print_tree()
     attribute_model.print_table()
-
-    json_file_path = f"{os.path.splitext(UPS_PS3_4_CC_2_5_FILE)[0]}.json"
-    attribute_model.save_as_json(json_file_path)
 
 
 if __name__ == "__main__":

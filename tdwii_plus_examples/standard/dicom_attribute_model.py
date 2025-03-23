@@ -1,11 +1,13 @@
-import json
 import logging
 import os
-from anytree import Node, RenderTree, PreOrderIter
+
+import requests
+from anytree import Node, PreOrderIter, RenderTree
+from anytree.exporter import JsonExporter
+from anytree.importer import JsonImporter
+from bs4 import BeautifulSoup
 from rich.console import Console
 from rich.table import Table, box
-import requests
-from bs4 import BeautifulSoup
 
 
 class DICOMAttributeModel:
@@ -16,19 +18,19 @@ class DICOMAttributeModel:
     of the attributes.
     """
 
-    def __init__(self, logger=None, additional_columns_attributes=None):
+    def __init__(self, logger=None):
         """Initializes the DICOMAttributeModel.
 
         Sets up the logger and initializes the attribute model.
 
         Args:
-            logger: A pre-configured logger instance to use. 
+            logger: A pre-configured logger instance to use.
                     If None, a default logger will be created.
-            additional_columns_attributes: List of tuples containing column indices and attribute names.
         """
         self.attribute_model = None
         self.logger = logger or self._create_default_logger()
-        self.additional_columns_attributes = additional_columns_attributes
+        self.attributes_mapping = {0: "name", 1: "tag"}
+        self.header = []
 
     def download_xhtml(self, url, file_path):
         """Downloads the XHTML document from the specified URL.
@@ -58,10 +60,10 @@ class DICOMAttributeModel:
         response = requests.get(url)
 
         # Decode the response content using UTF-8, ignoring any decoding errors
-        html_content = response.content.decode('utf-8', errors='ignore')
+        html_content = response.content.decode("utf-8", errors="ignore")
 
         # Write the HTML content to a file with UTF-8 encoding
-        with open(file_path, 'w', encoding='utf-8') as file:
+        with open(file_path, "w", encoding="utf-8") as file:
             file.write(html_content)
 
         self.logger.info(f"Document downloaded to {file_path}")
@@ -79,16 +81,16 @@ class DICOMAttributeModel:
             A BeautifulSoup DOM object representing the parsed XHTML.
         """
         self.logger.info(f"Reading XHTML DOM from {file_path}")
-        with open(file_path, 'r') as file:
+        with open(file_path, "r") as file:
             content = file.read()
-        dom = BeautifulSoup(content, 'html.parser')
+        dom = BeautifulSoup(content, "html.parser")
         self.logger.info("XHTML DOM read successfully")
         return dom
 
     def get_table(self, dom, table_id):
         """Retrieves the table element with the specified ID from the DOM.
 
-        DocBook XML to XHTML conversion stylesheets enclose tables in a 
+        DocBook XML to XHTML conversion stylesheets enclose tables in a
         <div class="table"> with the table identifier in <a id="table_ID"></a>
 
         Searches for an anchor tag with the given ID and then finds the next
@@ -133,7 +135,7 @@ class DICOMAttributeModel:
         if not table:
             return None
 
-        root = Node("Root")
+        root = Node("Body")
         level_nodes = {0: root}
 
         for row in table.find_all("tr")[1:]:
@@ -148,7 +150,8 @@ class DICOMAttributeModel:
             else:
                 self._create_node(row_data, row_nesting_level, level_nodes, root)
 
-        if table_nesting_level == 0:  # Assign attribute_model only at the top level
+        if table_nesting_level == 0:
+            self._extract_header(table)
             self.attribute_model = root
 
         self.logger.info(f"Nesting Level: {table_nesting_level}, Table parsed successfully")
@@ -162,7 +165,7 @@ class DICOMAttributeModel:
         """
         for pre, fill, node in RenderTree(self.attribute_model):
             node_display = f"{node.name}"
-            if hasattr(node, 'tag') and node.tag:
+            if hasattr(node, "tag") and node.tag:
                 node_display += f" {node.tag}"
             print(f"{pre}{node_display}")
 
@@ -171,23 +174,15 @@ class DICOMAttributeModel:
         console = Console()
         table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=box.ASCII_DOUBLE_HEAD)
 
-        # Define the columns
-        table.add_column("Name", style="dim", width=40)
-        table.add_column("Tag", style="dim", width=20)
-        if self.additional_columns_attributes:
-            for _, attr in self.additional_columns_attributes:
-                table.add_column(attr, style="dim", width=20)
+        # Define the columns using the extracted headers
+        for header in self.header:
+            table.add_column(header, style="dim", width=20)
 
         # Traverse the tree and add rows to the table
         for node in PreOrderIter(self.attribute_model):
             if node.name == "Root":
                 continue
-            row = [node.name, getattr(node, 'tag', '')]
-            if self.additional_columns_attributes:
-                row.extend(
-                    getattr(node, attr, '')
-                    for _, attr in self.additional_columns_attributes
-                )
+            row = [getattr(node, attr, "") for attr in self.attributes_mapping.values()]
             table.add_row(*row)
 
         console.print(table)
@@ -198,36 +193,70 @@ class DICOMAttributeModel:
         Args:
             file_path: The path to the JSON file where the model should be saved.
         """
-        def node_to_dict(node):
-            """Converts a node to a dictionary."""
-            node_dict = {"name": node.name}
-            if hasattr(node, 'tag'):
-                node_dict["tag"] = node.tag
-            if self.additional_columns_attributes:
-                for _, attr in self.additional_columns_attributes:
-                    if hasattr(node, attr):
-                        node_dict[attr] = getattr(node, attr)
-            node_dict["children"] = [node_to_dict(child) for child in node.children]
-            return node_dict
+        exporter = JsonExporter(indent=4, sort_keys=False)
 
-        root_dict = node_to_dict(self.attribute_model)
-        with open(file_path, 'w', encoding='utf-8') as json_file:
-            json.dump(root_dict, json_file, ensure_ascii=False, indent=4)
+        # Create a new top node "Table"
+        table_node = Node("Table")
+
+        # Add headers as a child of the table node
+        Node("Header", parent=table_node, cells=self.header)
+
+        # Add the attribute model as a child of the table node
+        self.attribute_model.parent = table_node
+
+        with open(file_path, "w", encoding="utf-8") as json_file:
+            exporter.write(table_node, json_file)
+
+        # Remove the attribute model from the table node after exporting
+        self.attribute_model.parent = None
+
         self.logger.info(f"Attribute model saved as JSON to {file_path}")
+
+    def load_from_json(self, file_path):
+        """Loads the attribute model from a JSON file.
+
+        Args:
+            file_path: The path to the JSON file from which to load the model.
+        """
+        importer = JsonImporter()
+        with open(file_path, "r", encoding="utf-8") as json_file:
+            table_node = importer.read(json_file)
+
+            # Extract headers from the tree
+            header_node = next((node for node in PreOrderIter(table_node) if node.name == "Header"), None)
+            if header_node:
+                self.header = header_node.cells
+
+            # Extract the attribute model from the tree
+            self.attribute_model = next((node for node in PreOrderIter(table_node) if node.name == "Body"), None)
+
+        self.logger.info(f"Attribute model loaded from JSON file {file_path}")
 
     def _create_default_logger(self):
         """Creates a default logger for the class.
 
         Configures a logger with a console handler and a specific format.
         """
-        logger = logging.getLogger('DICOMAttributeModel')
+        logger = logging.getLogger("DICOMAttributeModel")
         logger.setLevel(logging.DEBUG)
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.DEBUG)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
         return logger
+
+    def _extract_header(self, table):
+        """Extracts headers from the table and saves them in the headers attribute.
+
+        Only extracts headers of the columns corresponding to the keys in attributes_mapping.
+
+        Args:
+            table: The table element from which to extract headers.
+        """
+        cells = table.find_all("th")
+        self.header = [header.get_text(strip=True) for i, header in enumerate(cells) if i in self.attributes_mapping]
+        self.logger.info(f"Extracted Header: {self.header}")
 
     def _extract_row_data(self, row, table_nesting_level):
         """Extracts data from a table row.
@@ -253,16 +282,11 @@ class DICOMAttributeModel:
             colspans.append(int(cell.get("colspan", 1)))
 
         row_data = {}
-        node_attributes = ["name", "tag"]  # Default attributes for the first two columns
-        if self.additional_columns_attributes:
-            for col, attr in self.additional_columns_attributes:
-                node_attributes.insert(col, attr)
-
         attr_index = 0
         for cell, colspan in zip(cells, colspans):
-            if attr_index < len(node_attributes):
-                row_data[node_attributes[attr_index]] = cell
-                attr_index += colspan
+            if attr_index in self.attributes_mapping:
+                row_data[self.attributes_mapping[attr_index]] = cell
+            attr_index += colspan
 
         return row_data
 
@@ -292,6 +316,7 @@ class DICOMAttributeModel:
         node_name = row_data.pop("name")
         parent_node = level_nodes.get(row_nesting_level - 1, root)
         self.logger.debug(
-            f"Nesting Level: {row_nesting_level}, Name: {node_name}, Parent: {parent_node.name if parent_node else 'None'}")
+            f"Nesting Level: {row_nesting_level}, Name: {node_name}, Parent: {parent_node.name if parent_node else 'None'}"
+        )
         node = Node(node_name, parent=parent_node, **row_data)
         level_nodes[row_nesting_level] = node
