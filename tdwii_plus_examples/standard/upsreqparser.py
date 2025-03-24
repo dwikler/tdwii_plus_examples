@@ -86,6 +86,9 @@ def main():
     parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output (info level)")
     parser.add_argument("-d", "--debug", action="store_true", help="Enable debug output (debug level)")
     parser.add_argument("-q", "--quiet", action="store_true", help="Suppress all output (quiet mode)")
+    parser.add_argument("-ta", "--table", action="store_true", help="Print requirements as a flat ASCII table")
+    parser.add_argument("-tr", "--tree", action="store_true", help="Print attributes as an ASCII tree")
+    parser.add_argument("-c", "--colorize", action="store_true", help="Colorize the ASCII output by level of nesting")
     parser.add_argument("-i", "--include-depth", type=int, default=0, help="Recursion depth for including referenced tables")
     parser.add_argument(
         "-p",
@@ -102,8 +105,10 @@ def main():
     # attribute_model = DICOMAttributeModel(logger=logger, additional_columns_attributes=[(2, "ncreate"), (3, "nset")])
     attribute_model = UPSAttributeModel(include_depth=args.include_depth, logger=logger)
     attribute_model.filter_attributes_by_primitive(args.primitive)
-    attribute_model.print_tree()
-    attribute_model.print_table()
+    if args.tree:
+        attribute_model.print_tree(colorize=args.colorize)
+    if args.table:
+        attribute_model.print_table(colorize=args.colorize)
 
 
 if __name__ == "__main__":

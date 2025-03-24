@@ -8,6 +8,16 @@ from anytree.importer import JsonImporter
 from bs4 import BeautifulSoup
 from rich.console import Console
 from rich.table import Table, box
+from rich.text import Text
+
+LEVEL_COLORS = [
+    "rgb(255,255,255)",  # Node depth 0, Root: White
+    "rgb(173,216,230)",  # Node depth 1, Table Level 0: Light Blue
+    "rgb(135,206,250)",  # Node depth 2, Table Level 1: Sky Blue
+    "rgb(0,191,255)",  # Node depth 3, Table Level 2: Deep Sky Blue
+    "rgb(30,144,255)",  # Node depth 4, Table Level 3: Dodger Blue
+    "rgb(0,0,255)",  # Node depth 5, Table Level 4: Blue
+]
 
 
 class DICOMAttributeModel:
@@ -157,21 +167,30 @@ class DICOMAttributeModel:
         self.logger.info(f"Nesting Level: {table_nesting_level}, Table parsed successfully")
         return root
 
-    def print_tree(self):
+    def print_tree(self, colorize=None):
         """Prints the attribute model tree to the console.
 
         Traverses the tree structure and prints each node's name,
         tag (if available), along with its hierarchical representation.
         """
-        for pre, fill, node in RenderTree(self.attribute_model):
-            node_display = f"{node.name}"
-            if hasattr(node, "tag") and node.tag:
-                node_display += f" {node.tag}"
-            print(f"{pre}{node_display}")
+        # for pre, fill, node in RenderTree(self.attribute_model):
+        #     node_display = f"{node.name}"
+        #     if hasattr(node, "tag") and node.tag:
+        #         node_display += f" {node.tag}"
+        #     print(f"{pre}{node_display}")
 
-    def print_table(self):
+        console = Console(highlight=False)
+        for pre, fill, node in RenderTree(self.attribute_model):
+            style = LEVEL_COLORS[node.depth] if colorize else "default"
+            # print tree prefix in white and label in color based on depth
+            pre_text = Text(pre)
+            node_text = Text(f"{node.name} {getattr(node, 'tag', '')}", style=style)
+            console.print(pre_text + node_text)  # avoid f-string as it resets the style
+
+    def print_table(self, colorize=False):
         """Prints the attribute model tree as a flat table using rich."""
         console = Console()
+        row_style = None
         table = Table(show_header=True, header_style="bold magenta", show_lines=True, box=box.ASCII_DOUBLE_HEAD)
 
         # Define the columns using the extracted headers
@@ -180,10 +199,16 @@ class DICOMAttributeModel:
 
         # Traverse the tree and add rows to the table
         for node in PreOrderIter(self.attribute_model):
-            if node.name == "Root":
+            # skip the root node
+            if node.name == "Body":
                 continue
+            # identify Include nodes
+            is_include = "Include Table" in node.name
+            is_module_title = node.name.endswith("Module") and not node.name.startswith("All")
             row = [getattr(node, attr, "") for attr in self.attributes_mapping.values()]
-            table.add_row(*row)
+            if colorize:
+                row_style = "yellow" if is_include else "magenta" if is_module_title else LEVEL_COLORS[node.depth]
+            table.add_row(*row, style=row_style)
 
         console.print(table)
 

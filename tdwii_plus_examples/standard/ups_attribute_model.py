@@ -26,22 +26,30 @@ class UPSAttributeModel(DICOMAttributeModel):
     def __init__(self, include_depth=0, logger=None):
         super().__init__(logger)
         self.attributes_mapping.update(self.PRIMITIVE_MAPPING["ALL_PRIMITIVES"])
+        self._load_model(include_depth)
+
+    def _load_model(self, include_depth):
+        """Loads the attribute model from a JSON file if it exists, otherwise populates it from XHTML."""
 
         model_filepath = os.path.join(reference_directory, self.MODEL_FILENAME)
         xhtml_filepath = os.path.join(reference_directory, self.XHTML_FILENAME)
 
-        # TODO: fix discrepancy between include_depth of json file and arg
         if not os.path.exists(model_filepath):
-            if not os.path.exists(xhtml_filepath):
-                file_path = self.download_xhtml(self.URL, xhtml_filepath)
-            else:
-                file_path = xhtml_filepath
-            dom = self.read_xhtml_dom(file_path)
-            self._patch_outputinfoseq_include(dom, self.TABLE_ID)
-            self.parse_table(dom, self.TABLE_ID, include_depth=include_depth)
-            self.save_as_json(model_filepath)
+            self._populate_model(xhtml_filepath, include_depth, model_filepath)
         else:
             self.load_from_json(model_filepath)
+
+    def _populate_model(self, xhtml_filepath, include_depth, model_filepath):
+        """Creates the attribute model from XHTML and saves it as a JSON file."""
+
+        if not os.path.exists(xhtml_filepath):
+            file_path = self.download_xhtml(self.URL, xhtml_filepath)
+        else:
+            file_path = xhtml_filepath
+        dom = self.read_xhtml_dom(file_path)
+        self._patch_table(dom, self.TABLE_ID)
+        self.parse_table(dom, self.TABLE_ID, include_depth=include_depth)
+        self.save_as_json(model_filepath)
 
     def filter_attributes_by_primitive(self, primitive):
         """Filters the attribute model by the specified primitive.
@@ -49,6 +57,7 @@ class UPSAttributeModel(DICOMAttributeModel):
         Args:
             primitive: The key of PRIMITIVE_MAPPING to filter by.
         """
+
         if primitive not in self.PRIMITIVE_MAPPING:
             self.logger.warning(f"Primitive '{primitive}' not found in PRIMITIVE_MAPPING")
             return
@@ -78,13 +87,20 @@ class UPSAttributeModel(DICOMAttributeModel):
             if value in allowed_attributes or key not in self.PRIMITIVE_MAPPING["ALL_PRIMITIVES"]
         }
 
-    def _patch_outputinfoseq_include(self, dom, table_id):
-        outputinfoseq_include_id = self._find_outputinfoseq_include(dom, table_id)
-        if not outputinfoseq_include_id:
-            self.logger.warning("Include ID not found")
+    def _patch_table(self, dom, table_id):
+        """Patches the XHTML table to fix an error in the standard where the 'Include' row
+        under the '>Output Information Sequence' row is missing a '>' netsing symbol.
+
+        Args:
+            dom: The BeautifulSoup DOM object representing the XHTML document.
+            table_id: The ID of the table to patch.
+        """
+        target_element_id = self._search_element_id(dom, table_id)
+        if not target_element_id:
+            self.logger.warning("Output Information Sequence Include Row element ID not found")
             return
 
-        element = dom.find(id=outputinfoseq_include_id).find_parent()
+        element = dom.find(id=target_element_id).find_parent()
         span_element = element.find("span", class_="italic")
         if span_element:
             for child in span_element.children:
@@ -92,26 +108,26 @@ class UPSAttributeModel(DICOMAttributeModel):
                     new_text = child.replace(">Include", ">>Include")
                     child.replace_with(new_text)
 
-    def _find_outputinfoseq_include(self, dom, table_id):
+    def _search_element_id(self, dom, table_id):
         table = self.get_table(dom, table_id)
         if not table:
             return None
 
         self.logger.debug(f"Table with id {table_id} found")
         tr_elements = table.find_all("tr")
-        include_id = self._find_outputinfoseq_include_id(tr_elements)
+        include_id = self._search_sequence_include_id(tr_elements)
 
         if include_id is None:
-            self.logger.debug("No matching <tr> found")
+            self.logger.debug("No <tr> matching criteria found")
 
         return include_id
 
-    def _find_outputinfoseq_include_id(self, tr_elements):
+    def _search_sequence_include_id(self, tr_elements):
         target_found = False
         for tr in tr_elements:
             first_td = tr.find("td")
             if first_td and first_td.get_text(strip=True) == ">Output Information Sequence":
-                self.logger.debug("Target <tr> found")
+                self.logger.debug("Output Information Sequence <tr> found")
                 target_found = True
                 break
 
@@ -119,7 +135,7 @@ class UPSAttributeModel(DICOMAttributeModel):
             tr = tr.find_next("tr")
             first_td = tr.find("td")
             if first_td and first_td.get_text(strip=True).startswith(">Include"):
-                self.logger.debug("Next <tr> with required starting value found")
+                self.logger.debug("Include <tr> found")
                 return first_td.find("a")["id"]
 
         return None
