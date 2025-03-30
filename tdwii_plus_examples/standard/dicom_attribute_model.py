@@ -1,5 +1,6 @@
 import logging
 import os
+from datetime import datetime
 
 import requests
 from anytree import Node, PreOrderIter, RenderTree
@@ -28,7 +29,7 @@ class DICOMAttributeModel:
     of the attributes.
     """
 
-    def __init__(self, logger=None):
+    def __init__(self, include_depth=0, logger=None):
         """Initializes the DICOMAttributeModel.
 
         Sets up the logger and initializes the attribute model.
@@ -38,8 +39,12 @@ class DICOMAttributeModel:
                     If None, a default logger will be created.
         """
         self.attribute_model = None
+        self.include_depth = include_depth
         self.logger = logger or self._create_default_logger()
-        self.attributes_mapping = {0: "name", 1: "tag"}
+        # Maps column indices in the DICOM standard table to corresponding node attribute names
+        # for constructing a tree-like representation of the table's data.
+        self.column_to_attr = {0: "name", 1: "tag"}
+        # Initialize an empty list to store the column headers extracted from the table
         self.header = []
 
     def download_xhtml(self, url, file_path):
@@ -205,9 +210,9 @@ class DICOMAttributeModel:
             # identify Include nodes
             is_include = "Include Table" in node.name
             is_module_title = node.name.endswith("Module") and not node.name.startswith("All")
-            row = [getattr(node, attr, "") for attr in self.attributes_mapping.values()]
+            row = [getattr(node, attr, "") for attr in self.column_to_attr.values()]
             if colorize:
-                row_style = "yellow" if is_include else "magenta" if is_module_title else LEVEL_COLORS[node.depth]
+                row_style = "yellow" if is_include else "magenta" if is_module_title else LEVEL_COLORS[node.depth - 1]
             table.add_row(*row, style=row_style)
 
         console.print(table)
@@ -222,6 +227,9 @@ class DICOMAttributeModel:
 
         # Create a new top node "Table"
         table_node = Node("Table")
+
+        # Add info as a child of the table node
+        Node("Info", parent=table_node, date=datetime.now().isoformat(), include_depth=self.include_depth)
 
         # Add headers as a child of the table node
         Node("Header", parent=table_node, cells=self.header)
@@ -247,15 +255,26 @@ class DICOMAttributeModel:
         with open(file_path, "r", encoding="utf-8") as json_file:
             table_node = importer.read(json_file)
 
-            # Extract headers from the tree
+            info_node = next((node for node in PreOrderIter(table_node) if node.name == "Info"), None)
+
+            if info_node:
+                json_include_depth = info_node.include_depth
+                self.logger.info(f"JSON File depth: {json_include_depth}, Requested depth: {self.include_depth}")
+                depth_mismatch = json_include_depth != self.include_depth
+                if depth_mismatch:
+                    self.logger.debug(
+                        f"JSON File depth ({json_include_depth}) does not match requested depth ({self.include_depth})"
+                    )
+                    return False
+
             header_node = next((node for node in PreOrderIter(table_node) if node.name == "Header"), None)
             if header_node:
                 self.header = header_node.cells
 
-            # Extract the attribute model from the tree
             self.attribute_model = next((node for node in PreOrderIter(table_node) if node.name == "Body"), None)
 
         self.logger.info(f"Attribute model loaded from JSON file {file_path}")
+        return True
 
     def _create_default_logger(self):
         """Creates a default logger for the class.
@@ -274,13 +293,13 @@ class DICOMAttributeModel:
     def _extract_header(self, table):
         """Extracts headers from the table and saves them in the headers attribute.
 
-        Only extracts headers of the columns corresponding to the keys in attributes_mapping.
+        Only extracts headers of the columns corresponding to the keys in column_to_attr.
 
         Args:
             table: The table element from which to extract headers.
         """
         cells = table.find_all("th")
-        self.header = [header.get_text(strip=True) for i, header in enumerate(cells) if i in self.attributes_mapping]
+        self.header = [header.get_text(strip=True) for i, header in enumerate(cells) if i in self.column_to_attr]
         self.logger.info(f"Extracted Header: {self.header}")
 
     def _extract_row_data(self, row, table_nesting_level):
@@ -309,8 +328,8 @@ class DICOMAttributeModel:
         row_data = {}
         attr_index = 0
         for cell, colspan in zip(cells, colspans):
-            if attr_index in self.attributes_mapping:
-                row_data[self.attributes_mapping[attr_index]] = cell
+            if attr_index in self.column_to_attr:
+                row_data[self.column_to_attr[attr_index]] = cell
             attr_index += colspan
 
         return row_data

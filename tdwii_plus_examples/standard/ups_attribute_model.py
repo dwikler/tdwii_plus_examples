@@ -14,8 +14,8 @@ class UPSAttributeModel(DICOMAttributeModel):
     TABLE_ID = "table_CC.2.5-3"
     MODEL_FILENAME = "PS3_4_UPS.json"
 
-    PRIMITIVE_MAPPING = {
-        "ALL_PRIMITIVES": {2: "ncreate", 3: "nset", 4: "final", 5: "nget", 6: "matching", 7: "return", 8: "remark"},
+    DIMSE_MAPPING = {
+        "ALL_DIMSE": {2: "ncreate", 3: "nset", 4: "final", 5: "nget", 6: "matching", 7: "return", 8: "remark"},
         "N-CREATE": {2: "ncreate", 8: "remark"},
         "N-SET": {3: "nset", 8: "remark"},
         "N-GET": {5: "nget", 8: "remark"},
@@ -24,22 +24,23 @@ class UPSAttributeModel(DICOMAttributeModel):
     }
 
     def __init__(self, include_depth=0, logger=None):
-        super().__init__(logger)
-        self.attributes_mapping.update(self.PRIMITIVE_MAPPING["ALL_PRIMITIVES"])
-        self._load_model(include_depth)
+        super().__init__(include_depth, logger)
+        self.column_to_attr.update(self.DIMSE_MAPPING["ALL_DIMSE"])
+        self._load_model()
+        self.dimse = None
 
-    def _load_model(self, include_depth):
+    def _load_model(self):
         """Loads the attribute model from a JSON file if it exists, otherwise populates it from XHTML."""
 
         model_filepath = os.path.join(reference_directory, self.MODEL_FILENAME)
         xhtml_filepath = os.path.join(reference_directory, self.XHTML_FILENAME)
 
         if not os.path.exists(model_filepath):
-            self._populate_model(xhtml_filepath, include_depth, model_filepath)
-        else:
-            self.load_from_json(model_filepath)
+            self._populate_model(xhtml_filepath, model_filepath)
+        elif not self.load_from_json(model_filepath):
+            self._populate_model(xhtml_filepath, model_filepath)
 
-    def _populate_model(self, xhtml_filepath, include_depth, model_filepath):
+    def _populate_model(self, xhtml_filepath, model_filepath):
         """Creates the attribute model from XHTML and saves it as a JSON file."""
 
         if not os.path.exists(xhtml_filepath):
@@ -48,44 +49,84 @@ class UPSAttributeModel(DICOMAttributeModel):
             file_path = xhtml_filepath
         dom = self.read_xhtml_dom(file_path)
         self._patch_table(dom, self.TABLE_ID)
-        self.parse_table(dom, self.TABLE_ID, include_depth=include_depth)
+        self.parse_table(dom, self.TABLE_ID, include_depth=self.include_depth)
         self.save_as_json(model_filepath)
 
-    def filter_attributes_by_primitive(self, primitive):
-        """Filters the attribute model by the specified primitive.
+    def select_dimse(self, dimse):
+        """Selects the attribute model for the specified DIMSE Service.
 
         Args:
-            primitive: The key of PRIMITIVE_MAPPING to filter by.
+            dimse: The key of DIMSE_MAPPING to select.
         """
 
-        if primitive not in self.PRIMITIVE_MAPPING:
-            self.logger.warning(f"Primitive '{primitive}' not found in PRIMITIVE_MAPPING")
+        if dimse not in self.DIMSE_MAPPING:
+            self.logger.warning(f"DIMSE '{dimse}' not found in DIMSE_MAPPING")
             return
+        else:
+            self.dimse = dimse
+        dimse_attributes = set(self.DIMSE_MAPPING[dimse].values())
+        all_attributes = set(self.DIMSE_MAPPING["ALL_DIMSE"].values())
 
-        allowed_attributes = set(self.PRIMITIVE_MAPPING[primitive].values())
-        all_attributes = set(self.PRIMITIVE_MAPPING["ALL_PRIMITIVES"].values())
-
-        # Find the Body node
+        # Remove node attributes that are not belonging to the DIMSE
         body_node = next((node for node in PreOrderIter(self.attribute_model) if node.name == "Body"), None)
         if body_node:
-            # Traverse the Body node and remove attributes that are not allowed
             for node in PreOrderIter(body_node):
                 for attr in list(node.__dict__.keys()):
-                    if attr in all_attributes and attr not in allowed_attributes:
+                    if attr in all_attributes and attr not in dimse_attributes:
                         delattr(node, attr)
 
-        # Process headers and attributes_mapping together
-        allowed_indices = {key for key, value in self.PRIMITIVE_MAPPING[primitive].items()}
+        # Determine the columns indices corresponding to the selected DIMSE
+        dimse_indices = {key for key, value in self.DIMSE_MAPPING[dimse].items()}
+
+        # Remove header items that are not belonging to the DIMSE
         self.header = [
-            cell
-            for i, cell in enumerate(self.header)
-            if i in allowed_indices or i not in self.PRIMITIVE_MAPPING["ALL_PRIMITIVES"]
+            cell for i, cell in enumerate(self.header) if i in dimse_indices or i not in self.DIMSE_MAPPING["ALL_DIMSE"]
         ]
-        self.attributes_mapping = {
+
+        # Update the column_to_attr to only include attributes belonging to the selected DIMSE
+        self.column_to_attr = {
             key: value
-            for key, value in self.attributes_mapping.items()
-            if value in allowed_attributes or key not in self.PRIMITIVE_MAPPING["ALL_PRIMITIVES"]
+            for key, value in self.column_to_attr.items()
+            if value in dimse_attributes or key not in self.DIMSE_MAPPING["ALL_DIMSE"]
         }
+
+    def select_role(self, role):
+        """Selects the attribute model for the specified Role of the selected DIMSE Service User"""
+        if role is None:
+            return
+        if self.dimse in ("C-FIND", "FINAL", None):
+            self.logger.info(f"No role-specific requirements for {self.dimse}")
+            return
+
+        body_node = next((node for node in PreOrderIter(self.attribute_model) if node.name == "Body"), None)
+        if not body_node:
+            return
+
+        dimse_attr_key = next(iter(self.DIMSE_MAPPING[self.dimse]))
+        attribute_name = self.DIMSE_MAPPING[self.dimse][dimse_attr_key]
+
+        for node in PreOrderIter(body_node):
+            if hasattr(node, attribute_name):
+                value = getattr(node, attribute_name)
+                if not isinstance(value, str):
+                    continue
+                # Split SCU/SCP optionality requirements and any additional comment
+                parts = value.split("\n", 1)
+                optionality = parts[0]
+                if len(parts) > 1:
+                    setattr(node, attribute_name, optionality)
+                    setattr(node, "comment", parts[1])
+                    self.column_to_attr[9] = "comment"
+                    if "Comment" not in self.header:
+                        self.header.append("Comment")
+                # Split SCU/SCP optionality requirements
+                sub_parts = optionality.split("/", 1)
+                if len(sub_parts) > 1:
+                    setattr(node, attribute_name, sub_parts[0] if role == "SCU" else sub_parts[1])
+
+        for i, header in enumerate(self.header):
+            if "SCU/SCP" in header:
+                self.header[i] = header.replace("SCU/SCP", role)
 
     def _patch_table(self, dom, table_id):
         """Patches the XHTML table to fix an error in the standard where the 'Include' row

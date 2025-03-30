@@ -91,20 +91,33 @@ def main():
     parser.add_argument("-c", "--colorize", action="store_true", help="Colorize the ASCII output by level of nesting")
     parser.add_argument("-i", "--include-depth", type=int, default=0, help="Recursion depth for including referenced tables")
     parser.add_argument(
-        "-p",
-        "--primitive",
+        "-di",
+        "--dimse",
         type=str,
         choices=["N-CREATE", "N-SET", "N-GET", "C-FIND", "FINAL"],
-        default="ALL_PRIMITIVES",
-        help="Filter requirements per DIMSE primitive",
+        default=None,
+        help="Select DIMSE Service",
+    )
+    parser.add_argument(
+        "-r",
+        "--role",
+        type=str,
+        choices=["SCU", "SCP"],
+        default=None,
+        help="Select Role of DIMSE Service User (requires --dimse to be set)",
     )
     args = parser.parse_args()
+
+    if args.role is not None and not args.dimse:
+        parser.error("--role requires --dimse to be set")
 
     configure_logging(args)
 
     # attribute_model = DICOMAttributeModel(logger=logger, additional_columns_attributes=[(2, "ncreate"), (3, "nset")])
     attribute_model = UPSAttributeModel(include_depth=args.include_depth, logger=logger)
-    attribute_model.filter_attributes_by_primitive(args.primitive)
+    attribute_model.select_dimse(args.dimse)
+    attribute_model.select_role(args.role)
+
     if args.tree:
         attribute_model.print_tree(colorize=args.colorize)
     if args.table:
