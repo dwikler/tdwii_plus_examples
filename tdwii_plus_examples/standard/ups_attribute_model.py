@@ -9,6 +9,13 @@ reference_directory = os.path.abspath(os.path.join(current_file_directory, "../.
 
 
 class UPSAttributeModel(DICOMAttributeModel):
+    """Builds an information model from DICOM UPS SOP Classes Attributes tables.
+
+    This class provides services to download, parse, filter, and represent
+    XHTML format DICOM UPS SOP Classes attribute tables in a hierarchical structure.
+    It supports saving and loading the model as JSON for persistence.
+    """
+
     URL = "https://dicom.nema.org/medical/dicom/current/output/chtml/part04/sect_CC.2.5.html"
     XHTML_FILENAME = "PS3_4_CC.2.5.html"
     TABLE_ID = "table_CC.2.5-3"
@@ -24,36 +31,19 @@ class UPSAttributeModel(DICOMAttributeModel):
     }
 
     def __init__(self, include_depth=0, logger=None):
-        super().__init__(include_depth, logger)
-        self.column_to_attr.update(self.DIMSE_MAPPING["ALL_DIMSE"])
-        self._load_model()
+        super().__init__(
+            url=self.URL,
+            xhtml_filename=self.XHTML_FILENAME,
+            table_id=self.TABLE_ID,
+            model_filename=self.MODEL_FILENAME,
+            column_to_attr=self.DIMSE_MAPPING["ALL_DIMSE"],
+            include_depth=include_depth,
+            logger=logger,
+        )
         self.dimse = None
 
-    def _load_model(self):
-        """Loads the attribute model from a JSON file if it exists, otherwise populates it from XHTML."""
-
-        model_filepath = os.path.join(reference_directory, self.MODEL_FILENAME)
-        xhtml_filepath = os.path.join(reference_directory, self.XHTML_FILENAME)
-
-        if not os.path.exists(model_filepath):
-            self._populate_model(xhtml_filepath, model_filepath)
-        elif not self.load_from_json(model_filepath):
-            self._populate_model(xhtml_filepath, model_filepath)
-
-    def _populate_model(self, xhtml_filepath, model_filepath):
-        """Creates the attribute model from XHTML and saves it as a JSON file."""
-
-        if not os.path.exists(xhtml_filepath):
-            file_path = self.download_xhtml(self.URL, xhtml_filepath)
-        else:
-            file_path = xhtml_filepath
-        dom = self.read_xhtml_dom(file_path)
-        self._patch_table(dom, self.TABLE_ID)
-        self.parse_table(dom, self.TABLE_ID, include_depth=self.include_depth)
-        self.save_as_json(model_filepath)
-
     def select_dimse(self, dimse):
-        """Selects the attribute model for the specified DIMSE Service.
+        """Selects the attribute model for the specified DIMSE SOP Class.
 
         Args:
             dimse: The key of DIMSE_MAPPING to select.

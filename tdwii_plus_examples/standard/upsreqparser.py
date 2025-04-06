@@ -82,15 +82,25 @@ def configure_logging(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="DICOM UPS Attributes Requirements parser.")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output (info level)")
-    parser.add_argument("-d", "--debug", action="store_true", help="Enable debug output (debug level)")
-    parser.add_argument("-q", "--quiet", action="store_true", help="Suppress all output (quiet mode)")
-    parser.add_argument("-ta", "--table", action="store_true", help="Print requirements as a flat ASCII table")
-    parser.add_argument("-tr", "--tree", action="store_true", help="Print attributes as an ASCII tree")
-    parser.add_argument("-c", "--colorize", action="store_true", help="Colorize the ASCII output by level of nesting")
-    parser.add_argument("-i", "--include-depth", type=int, default=0, help="Recursion depth for including referenced tables")
-    parser.add_argument(
+    parser = argparse.ArgumentParser(description="DICOM UPS SOP Classes Attributes Requirements parser.")
+    # Logging options
+    logging_group = parser.add_argument_group("Logging Options")
+    logging_group.add_argument("-v", "--verbose", action="store_true", help="Enable verbose output (info level)")
+    logging_group.add_argument("-d", "--debug", action="store_true", help="Enable debug output (debug level)")
+    logging_group.add_argument("-q", "--quiet", action="store_true", help="Suppress all output (quiet mode)")
+
+    # Output options
+    output_group = parser.add_argument_group("Output Options")
+    output_group.add_argument("-ta", "--table", action="store_true", help="Print requirements as a flat ASCII table")
+    output_group.add_argument("-tr", "--tree", action="store_true", help="Print attributes as an ASCII tree")
+    output_group.add_argument("-c", "--colorize", action="store_true", help="Colorize the ASCII output by level of nesting")
+
+    # Processing options
+    filter_group = parser.add_argument_group("FIltering Options")
+    filter_group.add_argument(
+        "-i", "--include-depth", type=int, default=0, help="Recursion depth for including referenced tables"
+    )
+    filter_group.add_argument(
         "-di",
         "--dimse",
         type=str,
@@ -98,7 +108,7 @@ def main():
         default=None,
         help="Select DIMSE Service",
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "-r",
         "--role",
         type=str,
@@ -106,6 +116,8 @@ def main():
         default=None,
         help="Select Role of DIMSE Service User (requires --dimse to be set)",
     )
+    filter_group.add_argument("-x", "--exclude-titles", action="store_true", help="Exclude Module titles")
+
     args = parser.parse_args()
 
     if args.role is not None and not args.dimse:
@@ -117,6 +129,8 @@ def main():
     attribute_model = UPSAttributeModel(include_depth=args.include_depth, logger=logger)
     attribute_model.select_dimse(args.dimse)
     attribute_model.select_role(args.role)
+    if args.exclude_titles:
+        attribute_model.exclude_module_titles()
 
     if args.tree:
         attribute_model.print_tree(colorize=args.colorize)

@@ -20,32 +20,65 @@ LEVEL_COLORS = [
     "rgb(0,0,255)",  # Node depth 5, Table Level 4: Blue
 ]
 
+current_file_directory = os.path.abspath(os.path.dirname(__file__))
+reference_directory = os.path.abspath(os.path.join(current_file_directory, "../../ref"))
+
 
 class DICOMAttributeModel:
-    """Parses DICOM attribute information from an XHTML document.
+    """Builds a hierarchical information model from DICOM attribute tables in XHTML format.
 
-    This class downloads, reads, and parses an XHTML document containing
-    DICOM attribute information, constructing a tree-like representation
-    of the attributes.
+    This class downloads and parses DICOM attribute tables, structuring them into a hierarchical model.
+    The model can be filtered and saved in JSON format.
     """
 
-    def __init__(self, include_depth=0, logger=None):
+    # Class attributes with default values
+    # TODO: remove or add default values to Part 3 in HTML format for example with no default value for table_id
+    URL = None
+    XHTML_FILENAME = None
+    TABLE_ID = None
+    MODEL_FILENAME = None
+
+    def __init__(
+        self,
+        url=None,
+        xhtml_filename=None,
+        table_id=None,
+        model_filename=None,
+        column_to_attr=None,
+        include_depth=0,
+        logger=None,
+    ):
         """Initializes the DICOMAttributeModel.
 
         Sets up the logger and initializes the attribute model.
 
         Args:
-            logger: A pre-configured logger instance to use.
+            url (str, optional): The URL to fetch data from. Defaults to None.
+            xhtml_filename (str, optional): The filename of the XHTML file. Defaults to None.
+            table_id (str, optional): The ID of the table to process. Defaults to None.
+            model_filename (str, optional): The filename of the model file. Defaults to None.
+            include_depth (int, optional): The depth to include in the model. Defaults to 0.
+            logger (logging.Logger, optional): A pre-configured logger instance to use.
                     If None, a default logger will be created.
+
         """
-        self.attribute_model = None
+        self.url = url or self.URL
+        self.table_id = table_id or self.TABLE_ID
+        xhtml_filename = xhtml_filename or self.XHTML_FILENAME
+        model_filename = model_filename or self.MODEL_FILENAME
+        self.model_filepath = os.path.join(reference_directory, model_filename)
+        self.xhtml_filepath = os.path.join(reference_directory, xhtml_filename)
         self.include_depth = include_depth
         self.logger = logger or self._create_default_logger()
         # Maps column indices in the DICOM standard table to corresponding node attribute names
         # for constructing a tree-like representation of the table's data.
-        self.column_to_attr = {0: "name", 1: "tag"}
+        self.column_to_attr = {**{0: "name", 1: "tag"}, **(column_to_attr or {})}
+
+        self.attribute_model = None
         # Initialize an empty list to store the column headers extracted from the table
         self.header = []
+
+        self._load_model()
 
     def download_xhtml(self, url, file_path):
         """Downloads the XHTML document from the specified URL.
@@ -172,6 +205,19 @@ class DICOMAttributeModel:
         self.logger.info(f"Nesting Level: {table_nesting_level}, Table parsed successfully")
         return root
 
+    def exclude_module_titles(self):
+        """Removes nodes corresponding to Module title rows as found in some PS3.4 tables"""
+        body_node = next((node for node in PreOrderIter(self.attribute_model) if node.name == "Body"), None)
+        if not body_node:
+            self.logger.warning("Body node not found in the attribute model.")
+            return
+
+        # Traverse the tree and remove nodes where is_module_title is True
+        for node in list(PreOrderIter(body_node)):
+            if self._is_module_title(node):
+                self.logger.info(f"Removing node: {node.name}")
+                node.parent = None
+
     def print_tree(self, colorize=None):
         """Prints the attribute model tree to the console.
 
@@ -207,12 +253,15 @@ class DICOMAttributeModel:
             # skip the root node
             if node.name == "Body":
                 continue
-            # identify Include nodes
-            is_include = "Include Table" in node.name
-            is_module_title = node.name.endswith("Module") and not node.name.startswith("All")
             row = [getattr(node, attr, "") for attr in self.column_to_attr.values()]
             if colorize:
-                row_style = "yellow" if is_include else "magenta" if is_module_title else LEVEL_COLORS[node.depth - 1]
+                row_style = (
+                    "yellow"
+                    if self._is_include(node)
+                    else "magenta"
+                    if self._is_module_title(node)
+                    else LEVEL_COLORS[node.depth - 1]
+                )
             table.add_row(*row, style=row_style)
 
         console.print(table)
@@ -290,6 +339,34 @@ class DICOMAttributeModel:
         logger.addHandler(console_handler)
         return logger
 
+    def _load_model(self):
+        """Loads the attribute model from a JSON file if it exists, otherwise populates it from XHTML."""
+
+        if not os.path.exists(self.model_filepath):
+            self._populate_model(self.xhtml_filepath, self.model_filepath)
+        elif not self.load_from_json(self.model_filepath):
+            self._populate_model(self.xhtml_filepath, self.model_filepath)
+
+    def _populate_model(self, xhtml_filepath, model_filepath):
+        """Creates the attribute model from XHTML and saves it as a JSON file."""
+
+        if not os.path.exists(xhtml_filepath):
+            file_path = self.download_xhtml(self.url, xhtml_filepath)
+        else:
+            file_path = xhtml_filepath
+        dom = self.read_xhtml_dom(file_path)
+        self._patch_table(dom, self.table_id)
+        self.parse_table(dom, self.table_id, include_depth=self.include_depth)
+        self.save_as_json(model_filepath)
+
+    def _patch_table(self, dom, table_id):
+        """
+        Patches the XHTML table to fix potential errors.
+
+        This method does nothing and may be overridden in derived classes if patching is needed.
+        """
+        pass
+
     def _extract_header(self, table):
         """Extracts headers from the table and saves them in the headers attribute.
 
@@ -364,3 +441,25 @@ class DICOMAttributeModel:
         )
         node = Node(node_name, parent=parent_node, **row_data)
         level_nodes[row_nesting_level] = node
+
+    def _is_include(self, node):
+        """Determines if a node represents an 'Include' table.
+
+        Args:
+            node: The node to check.
+
+        Returns:
+            True if the node represents an 'Include' table, False otherwise.
+        """
+        return "Include Table" in node.name
+
+    def _is_module_title(self, node):
+        """Determines if a node is a Module title.
+
+        Args:
+            node: The node to check.
+
+        Returns:
+            True if the node is a module title, False otherwise.
+        """
+        return not hasattr(node, "tag") and not self._is_include(node)
