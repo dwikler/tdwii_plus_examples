@@ -41,6 +41,7 @@ class UPSAttributeModel(DICOMAttributeModel):
             logger=logger,
         )
         self.dimse = None
+        self.role = None
 
     def select_dimse(self, dimse):
         """Selects the attribute model for the specified DIMSE SOP Class.
@@ -81,9 +82,11 @@ class UPSAttributeModel(DICOMAttributeModel):
         }
 
     def select_role(self, role):
-        """Selects the attribute model for the specified Role of the selected DIMSE Service User"""
+        """Selects the attribute model for the specified Role of the selected DIMSE Service User."""
         if role is None:
             return
+        else:
+            self.role = role
         if self.dimse in ("C-FIND", "FINAL", None):
             self.logger.info(f"No role-specific requirements for {self.dimse}")
             return
@@ -92,8 +95,7 @@ class UPSAttributeModel(DICOMAttributeModel):
         if not body_node:
             return
 
-        dimse_attr_key = next(iter(self.DIMSE_MAPPING[self.dimse]))
-        attribute_name = self.DIMSE_MAPPING[self.dimse][dimse_attr_key]
+        attribute_name = self._get_dimse_attribute_name()
 
         for node in PreOrderIter(body_node):
             if hasattr(node, attribute_name):
@@ -117,6 +119,45 @@ class UPSAttributeModel(DICOMAttributeModel):
         for i, header in enumerate(self.header):
             if "SCU/SCP" in header:
                 self.header[i] = header.replace("SCU/SCP", role)
+
+    def select_required(self):
+        """Selects the required attribute's data element only."""
+        if self.dimse is None or self.role is None:
+            self.logger.warning("No specified DIMSE Service or Role, including all attributes")
+        else:
+            body_node = next((node for node in PreOrderIter(self.attribute_model) if node.name == "Body"), None)
+            if body_node:
+                self._remove_non_required_nodes(body_node)
+
+    def _remove_non_required_nodes(self, body_node):
+        """Removes nodes that are not required based on their Type.
+
+        Args:
+            body_node: The body node of the attribute model.
+        """
+        # TODO: Check what to do with "" in FINAL
+        # TODO: Check what to do with "Not allowed" types
+        types_to_keep = ["1", "1C", "2", "2C", "U", "R", "RC", "P", "X"]
+        types_to_remove = ["3", "-", "O"]
+        for node in PreOrderIter(body_node):
+            attribute_name = self._get_dimse_attribute_name()
+            if hasattr(node, attribute_name):
+                dcmtype = getattr(node, attribute_name)
+                if dcmtype in types_to_remove and dcmtype not in types_to_keep:
+                    self.logger.debug(f"[{dcmtype.rjust(3)}] : Removing {node.name} element")
+                    node.parent = None
+
+            # Remove nodes under "Sequence" nodes which are not required or which can be empty
+            if "Sequence" in node.name and hasattr(node, attribute_name):
+                dcmtype = getattr(node, attribute_name)
+                if dcmtype in ["3", "2", "2C", "-", "O", "Not allowed"]:
+                    self.logger.debug(f"[{dcmtype.rjust(3)}] : Removing {node.name} subelements")
+                    for descendant in node.descendants:
+                        descendant.parent = None
+
+    def _get_dimse_attribute_name(self):
+        dimse_attr_key = next(iter(self.DIMSE_MAPPING[self.dimse]))
+        return self.DIMSE_MAPPING[self.dimse][dimse_attr_key]
 
     def _patch_table(self, dom, table_id):
         """Patches the XHTML table to fix an error in the standard where the 'Include' row

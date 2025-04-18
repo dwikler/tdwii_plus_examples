@@ -116,21 +116,32 @@ def main():
         default=None,
         help="Select Role of DIMSE Service User (requires --dimse to be set)",
     )
+    filter_group.add_argument(
+        "-m",
+        "--mandatory",
+        action="store_true",
+        help="Filter requirements per DICOM Type (requires --role and --primitive to be set)",
+    )
     filter_group.add_argument("-x", "--exclude-titles", action="store_true", help="Exclude Module titles")
 
     args = parser.parse_args()
 
     if args.role is not None and not args.dimse:
         parser.error("--role requires --dimse to be set")
+    if args.mandatory and not (args.role and args.dimse):
+        parser.error("--mandatory requires --role and --primitive to be set")
+    if args.colorize and not args.table and not args.tree:
+        parser.error("--colorize requires --table or --tree to be set")
 
     configure_logging(args)
 
-    # attribute_model = DICOMAttributeModel(logger=logger, additional_columns_attributes=[(2, "ncreate"), (3, "nset")])
     attribute_model = UPSAttributeModel(include_depth=args.include_depth, logger=logger)
     attribute_model.select_dimse(args.dimse)
     attribute_model.select_role(args.role)
     if args.exclude_titles:
         attribute_model.exclude_module_titles()
+    if args.mandatory:
+        attribute_model.select_required()
 
     if args.tree:
         attribute_model.print_tree(colorize=args.colorize)

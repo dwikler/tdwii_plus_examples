@@ -57,6 +57,7 @@ class DICOMAttributeModel:
             xhtml_filename (str, optional): The filename of the XHTML file. Defaults to None.
             table_id (str, optional): The ID of the table to process. Defaults to None.
             model_filename (str, optional): The filename of the model file. Defaults to None.
+            column_to_attr (dict, optional): The mapping from column indices to node attributes. Defaults to None.
             include_depth (int, optional): The depth to include in the model. Defaults to 0.
             logger (logging.Logger, optional): A pre-configured logger instance to use.
                     If None, a default logger will be created.
@@ -215,7 +216,7 @@ class DICOMAttributeModel:
         # Traverse the tree and remove nodes where is_module_title is True
         for node in list(PreOrderIter(body_node)):
             if self._is_module_title(node):
-                self.logger.info(f"Removing node: {node.name}")
+                self.logger.debug(f"Removing Module title node: {node.name}")
                 node.parent = None
 
     def print_tree(self, colorize=None):
@@ -462,4 +463,4 @@ class DICOMAttributeModel:
         Returns:
             True if the node is a module title, False otherwise.
         """
-        return not hasattr(node, "tag") and not self._is_include(node)
+        return not hasattr(node, "tag") and not self._is_include(node) and node.name != "Body"
